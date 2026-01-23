@@ -13,13 +13,17 @@
     <AssemblyVersion>3.1.0.0</AssemblyVersion>
     <FileVersion>3.1.0.0</FileVersion>
 	  <CopyLocalLockFileAssemblies>True</CopyLocalLockFileAssemblies>
-	  <Configurations>Debug;Release;Release2025</Configurations>
+	  <Configurations>Debug;Release;Release2025;Release2024</Configurations>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <OutputPath>c:\programdata\Autodesk\Revit\addins\2026\Metamorphosis\</OutputPath>
     <DefineConstants>TRACE;DEBUG;REVIT2026;LONGELEMENTIDS</DefineConstants>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <OutputPath>bin\Release2026\</OutputPath>
+    <DefineConstants>TRACE;REVIT2026;LONGELEMENTIDS</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release2024|AnyCPU'">
     <OutputPath>bin\Release2026\</OutputPath>
     <DefineConstants>TRACE;REVIT2026;LONGELEMENTIDS</DefineConstants>
   </PropertyGroup>

@@ -126,7 +126,7 @@ namespace Metamorphosis.Utilities
             if (values.Length != 7) return false;
 
             point = new XYZ(Double.Parse(values[0],CultureInfo.InvariantCulture), Double.Parse(values[1], CultureInfo.InvariantCulture), Double.Parse(values[2], CultureInfo.InvariantCulture));
-            vector = new XYZ(Double.Parse(values[3], CultureInfo.InvariantCulture), Double.Parse(values[4]), Double.Parse(values[5], CultureInfo.InvariantCulture));
+            vector = new XYZ(Double.Parse(values[3], CultureInfo.InvariantCulture), Double.Parse(values[4], CultureInfo.InvariantCulture), Double.Parse(values[5], CultureInfo.InvariantCulture));
             rotation = float.Parse(values[6], CultureInfo.InvariantCulture);
 
             return true;
@@ -147,7 +147,7 @@ namespace Metamorphosis.Utilities
             if (values.Length==12)
             {
                 from2 = new XYZ(Double.Parse(values[6], CultureInfo.InvariantCulture), Double.Parse(values[7], CultureInfo.InvariantCulture), Double.Parse(values[8], CultureInfo.InvariantCulture));
-                to2 = new XYZ(Double.Parse(values[9]), Double.Parse(values[10], CultureInfo.InvariantCulture), Double.Parse(values[11], CultureInfo.InvariantCulture));
+                to2 = new XYZ(Double.Parse(values[9], CultureInfo.InvariantCulture), Double.Parse(values[10], CultureInfo.InvariantCulture), Double.Parse(values[11], CultureInfo.InvariantCulture));
 
             }
 

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -151,11 +152,11 @@ namespace Metamorphosis.Utilities
             if (elem != null)
             {
                 
-                if (Double.TryParse(elem.Attributes["length"].Value, out moveTol) == false)
+                if (Double.TryParse(elem.Attributes["length"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out moveTol) == false)
                 {
                     System.Diagnostics.Debug.WriteLine("Invalid Length Tolerance Setting!" + elem.Attributes["length"].Value);
                 }
-                if (float.TryParse(elem.Attributes["angle"].Value, out angleTol) == false)
+                if (float.TryParse(elem.Attributes["angle"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out angleTol) == false)
                 {
                     System.Diagnostics.Debug.WriteLine("Invalid Angle Tolerance Setting!" + elem.Attributes["angle"].Value);
                 }
