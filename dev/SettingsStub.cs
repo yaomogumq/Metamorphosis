@@ -19,9 +19,17 @@ namespace Metamorphosis.Utilities
 {
     internal static class Settings
     {
+        internal enum LogLevel { Basic, Verbose };
+
         internal static bool GetVersionGuidOption()
         {
             return false;
+        }
+
+        /// <summary>Basic keeps the journal readable; Verbose logs every geometry INSERT.</summary>
+        internal static LogLevel GetLogLevel()
+        {
+            return LogLevel.Basic;
         }
     }
 }

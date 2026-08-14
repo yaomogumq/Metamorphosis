@@ -394,6 +394,8 @@
     <Compile Include="IFilenameHint.cs" />
     <Compile Include="Objects\Change.cs" />
     <Compile Include="Objects\ChangeSummary.cs" />
+    <Compile Include="Objects\LinkState.cs" />
+    <Compile Include="Objects\LinkWarning.cs" />
     <Compile Include="Objects\RevitElement.cs" />
     <Compile Include="Objects\Parameter.cs" />
     <Compile Include="Objects\VectorObject.cs" />
@@ -482,6 +484,7 @@
     <EmbeddedResource Include="Images\clear-96.png" />
     <EmbeddedResource Include="DBScript\UpgradeToV1.txt" />
     <EmbeddedResource Include="DBScript\UpgradeToV1.1.txt" />
+    <EmbeddedResource Include="DBScript\UpgradeToV1.2.txt" />
     <Content Include="Settings.xml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

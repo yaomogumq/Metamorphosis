@@ -74,9 +74,11 @@ namespace Metamorphosis
             using (SQLiteConnection conn = new SQLiteConnection("Data Source=" + _dbFilename + ";Version=3;"))
             {
                 conn.Open();
+                string prefix = System.Reflection.Assembly.GetExecutingAssembly().GetName().Name;
+
 
                 // create the table structure from the sql instructions.
-                string[] lines = Utilities.DataUtility.ReadSQLScript("Metamorphosis.databaseFormat.txt");
+                string[] lines = Utilities.DataUtility.ReadSQLScript($"{prefix}.databaseFormat.txt");
 
                 foreach (string sql in lines)
                 {
@@ -124,7 +126,7 @@ namespace Metamorphosis
             System.Diagnostics.Debug.WriteLine(msg);
 
             // go through all of the type elements and instances and capture the parameter ids
-            _headerDict["SchemaVersion"] = "1.1";
+            _headerDict["SchemaVersion"] = "1.2";
             _headerDict["Model"] = Utilities.RevitUtils.GetModelPath(_doc);
             _headerDict["ExportVersion"] = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString();
             _headerDict["ExportDate"] = DateTime.Now.ToString();
@@ -134,7 +136,7 @@ namespace Metamorphosis
             _headerDict["RevitVersion"] = _doc.Application.VersionNumber;
             _headerDict["RevitBuild"] = _doc.Application.VersionBuild;
 
-                #if REVIT2015 || REVIT2016 || REVIT2017 || REVIT2018
+#if REVIT2015 || REVIT2016 || REVIT2017 || REVIT2018
                 // do not support Document Version
 #else
             DocumentVersion ver = Document.GetDocumentVersion(_doc);
@@ -167,6 +169,10 @@ namespace Metamorphosis
 
             updateGeometryTable(instances);
             log((DateTime.Now - start) + ": Geometry Table Updated for Types");
+
+            updateLinksTable();
+            log((DateTime.Now - start) + ": Links Table Updated");
+
             Duration = DateTime.Now - start;
             log("Total Time: " + Duration.TotalMinutes + " minutes");
         }
@@ -541,6 +547,69 @@ namespace Metamorphosis
             }
         }
 
+        /// <summary>
+        /// Record which links were present, and in what state, when this snapshot was taken.
+        ///
+        /// Without this a link being unloaded, reloaded or swapped for another revision
+        /// between two snapshots is indistinguishable from someone having moved the walls -
+        /// every room bounded by that link reports an area change either way. Storing the
+        /// state is what lets the comparison tell those two apart afterwards.
+        /// </summary>
+        private void updateLinksTable()
+        {
+            IList<Objects.LinkState> links;
+            try
+            {
+                links = Utilities.RevitUtils.CollectLinkStates(_doc);
+            }
+            catch (Exception ex)
+            {
+                // A snapshot without a link manifest is still a usable snapshot, so this
+                // must never take the export down with it.
+                log("Could not collect link states: " + ex.GetType().Name + ": " + ex.Message);
+                return;
+            }
+
+            using (SQLiteConnection conn = new SQLiteConnection("Data Source=" + _dbFilename + ";Version=3;"))
+            {
+                string currentQuery = "";
+                try
+                {
+                    conn.Open();
+                    using (var transaction = conn.BeginTransaction())
+                    {
+                        foreach (var link in links)
+                        {
+                            var cmd = conn.CreateCommand();
+                            cmd.CommandText = String.Format(
+                                "INSERT INTO _objects_links (instance_id,type_id,name,path,status,is_nested,doc_guid,num_saves) VALUES({0},{1},'{2}','{3}','{4}',{5},{6},{7})",
+                                link.InstanceId,
+                                link.TypeId,
+                                escapeQuote(link.Name),
+                                escapeQuote(link.Path),
+                                escapeQuote(link.Status),
+                                link.IsNested ? 1 : 0,
+                                String.IsNullOrEmpty(link.DocumentGuid) ? "NULL" : "'" + escapeQuote(link.DocumentGuid) + "'",
+                                link.NumberOfSaves);
+                            currentQuery = cmd.CommandText;
+
+                            cmd.ExecuteNonQuery();
+                        }
+
+                        transaction.Commit();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log("Exception updating Links Table: " + ex.GetType().Name + ": " + ex.Message);
+                    log("Current Query: " + currentQuery);
+                    throw; // rethrow;
+                }
+            }
+
+            log("Recorded " + links.Count + " link(s) in the snapshot.");
+        }
+
         private Level lookupLevel(Element e, XYZ pt)
         {
             // given the Element, figure out the level if possible.
@@ -565,6 +634,8 @@ namespace Metamorphosis
         
         private string escapeQuote(string input)
         {
+            if (input == null) return String.Empty;
+
             return input.Replace("'", "''");
         }
 

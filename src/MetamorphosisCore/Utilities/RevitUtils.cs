@@ -62,6 +62,90 @@ namespace Metamorphosis.Utilities
             return allDocs;
         }
 
+        /// <summary>
+        /// Record every Revit link in the document, loaded or not.
+        ///
+        /// Unloaded links matter as much as loaded ones here: the point is to notice when
+        /// a link's PRESENCE differs between two snapshots, and a link that has gone away
+        /// is exactly the case that makes rooms appear to change size. Name, path and
+        /// status all read fine while unloaded; only the content fingerprint needs a live
+        /// Document and so is left null.
+        /// </summary>
+        internal static IList<Objects.LinkState> CollectLinkStates(Document active)
+        {
+            List<Objects.LinkState> states = new List<Objects.LinkState>();
+            if (active == null) return states;
+
+            FilteredElementCollector coll = new FilteredElementCollector(active);
+            coll.OfClass(typeof(RevitLinkInstance));
+
+            foreach (RevitLinkInstance instance in coll.Cast<RevitLinkInstance>())
+            {
+                Objects.LinkState state = new Objects.LinkState()
+                {
+                    InstanceId = instance.Id.AsLong()
+                };
+
+                RevitLinkType type = null;
+                try
+                {
+                    ElementId typeId = instance.GetTypeId();
+                    if (typeId != ElementId.InvalidElementId)
+                    {
+                        state.TypeId = typeId.AsLong();
+                        type = active.GetElement(typeId) as RevitLinkType;
+                    }
+                }
+                catch { /* keep going - a link we cannot describe still counts as present */ }
+
+                if (type != null)
+                {
+                    try { state.Name = type.Name; } catch { }
+                    try { state.IsNested = type.IsNestedLink; } catch { }
+                    try { state.Status = type.GetLinkedFileStatus().ToString(); } catch { }
+                    try
+                    {
+                        var reference = type.GetExternalFileReference();
+                        if (reference != null)
+                        {
+                            state.Path = ModelPathUtils.ConvertModelPathToUserVisiblePath(reference.GetAbsolutePath());
+                        }
+                    }
+                    catch { /* a NotFound link has no resolvable path */ }
+                }
+
+                if (String.IsNullOrEmpty(state.Name)) state.Name = "(unnamed link " + state.InstanceId + ")";
+
+                // Only a loaded link has a Document, so this is where the fingerprint
+                // stops being available - null here means "could not tell", not "same".
+                Document linkDoc = null;
+                try { linkDoc = instance.GetLinkDocument(); } catch { }
+
+                if (linkDoc != null)
+                {
+                    if (String.IsNullOrEmpty(state.Path)) state.Path = linkDoc.PathName;
+#if REVIT2015 || REVIT2016 || REVIT2017 || REVIT2018
+                    // DocumentVersion is not available on these releases.
+#else
+                    try
+                    {
+                        DocumentVersion version = Document.GetDocumentVersion(linkDoc);
+                        if (version != null)
+                        {
+                            state.DocumentGuid = version.VersionGUID.ToString();
+                            state.NumberOfSaves = version.NumberOfSaves;
+                        }
+                    }
+                    catch { /* leave the fingerprint absent rather than guess */ }
+#endif
+                }
+
+                states.Add(state);
+            }
+
+            return states;
+        }
+
         internal static string GetModelPath( Document doc )
         {
             if (doc == null) return String.Empty; 

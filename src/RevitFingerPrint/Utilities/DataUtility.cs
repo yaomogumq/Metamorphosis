@@ -13,27 +13,41 @@ namespace Metamorphosis.Utilities
     /// </summary>
     internal static class DataUtility
     {
-        internal static Version CurrentVersion = new Version(1, 1);
+        internal static Version CurrentVersion = new Version(1, 2);
 
         private static Assembly _CurrentAsm = System.Reflection.Assembly.GetExecutingAssembly();
         private static Dictionary<Version, string> _UpgradeScripts = new Dictionary<Version, string>() { { new Version(1, 0), "Metamorphosis.DBScript.UpgradeToV1.txt" },
-            { new Version(1,1), "Metamorphosis.DBScript.UpgradeToV1.1.txt" } };
+            { new Version(1,1), "Metamorphosis.DBScript.UpgradeToV1.1.txt" },
+            { new Version(1,2), "Metamorphosis.DBScript.UpgradeToV1.2.txt" } };
         
         internal static void UpgradeFrom(SQLiteConnection conn, Version v, Action<string> log)
         {
             var todo = _UpgradeScripts.Where(s => s.Key > v).OrderBy(s => s.Key).ToList();
             if (log != null) log("=> There are " + todo.Count + " upgrades to the database.");
 
-           
+
+            bool fixNameSpace = false;
+            if (System.Reflection.Assembly.GetExecutingAssembly().GetName().Name != "Metamorphosis")
+            {
+                fixNameSpace = true;
+            }
 
             foreach( var script in todo )
             {
-                if (log != null) log("   => Version: " + script.Key + " Update: " + script.Value);
+                string val = script.Value;
+                if (fixNameSpace) val = val.Replace("Metamorphosis.", "MetamorphosisCore.");
+                if (log != null) log("   => Version: " + script.Key + " Update: " + val);
 
-                string[] statements = ReadSQLScript(script.Value);
+                
+                if (System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceInfo(val) == null)
+                {
+                    if (log != null) log("ISSUE: Unable to find desired script: " + val);
+                    continue;
+                }
+                string[] statements = ReadSQLScript(val);
                 if (statements == null)
                 {
-                    if (log != null) log("ISSUE: Unable to find desired script: " + script.Value);
+                    if (log != null) log("ISSUE: Unable to find desired script: " + val);
                     continue;
                 }
 

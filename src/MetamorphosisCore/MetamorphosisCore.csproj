@@ -284,6 +284,7 @@
     <EmbeddedResource Include="Images\clear-96.png" />
     <EmbeddedResource Include="DBScript\UpgradeToV1.txt" />
     <EmbeddedResource Include="DBScript\UpgradeToV1.1.txt" />
+    <EmbeddedResource Include="DBScript\UpgradeToV1.2.txt" />
     <Content Include="Settings.xml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

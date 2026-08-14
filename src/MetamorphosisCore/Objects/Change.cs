@@ -81,6 +81,19 @@ namespace Metamorphosis.Objects
         public string MoveDescription { get; set; }
 
         public string RotationDescription { get; set; }
+
+        /// <summary>
+        /// This change may be an artefact of the linked models differing between the two
+        /// snapshots rather than a real edit. A room's area is computed from whatever
+        /// bounds it, so a link merely being unloaded or swapped for another revision
+        /// moves the number without anyone having touched the design.
+        ///
+        /// Deliberately a flag rather than a change type: the element really did report a
+        /// difference, and it is still listed in full. Suppressing it would throw away a
+        /// genuine edit made during the same period. See the comparison's LinkWarnings for
+        /// which link is responsible.
+        /// </summary>
+        public bool PossibleLinkArtifact { get; set; } = false;
         #endregion
 
         #region PublicMethods

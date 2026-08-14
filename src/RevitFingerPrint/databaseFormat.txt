@@ -5,6 +5,7 @@ CREATE TABLE "_objects_ercv"("id" INTEGER PRIMARY KEY,"entity_id" INTEGER,"row_i
 CREATE TABLE "_objects_id"("id" INTEGER,"external_id" BLOB,"viewable_id" BLOB,"category" TEXT,"isType" INTEGER,"versionguid" TEXT);
 CREATE TABLE "_objects_val"("id" INTEGER,"value" BLOB UNIQUE);
 CREATE TABLE "_objects_geom"("id" INTEGER,"BoundingBoxMin" BLOB,"BoundingBoxMax" BLOB,"Location" BLOB, "Location2" BLOB, "Level" BLOB, "Rotation" FLOAT);
+CREATE TABLE "_objects_links"("id" INTEGER PRIMARY KEY,"instance_id" INTEGER,"type_id" INTEGER,"name" BLOB,"path" BLOB,"status" TEXT,"is_nested" INTEGER,"doc_guid" TEXT,"num_saves" INTEGER);
 CREATE INDEX "_objects_eav_idx_entity_id" on "_objects_eav" (entity_id);
 CREATE INDEX "_objects_ercv_idx_entity_id" on "_objects_ercv" (entity_id);
 CREATE INDEX "_objects_ercv_idx_entity_id_row_id_column_id" on "_objects_ercv" (entity_id, row_id, column_id);
