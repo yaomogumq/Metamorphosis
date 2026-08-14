@@ -66,12 +66,16 @@ FX = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319"
 # fully-qualified inline rather than through a using, so grepping the usings misses it.
 ENGINE_SOURCES = [
     "ComparisonMaker.cs",
+    "SnapshotMaker.cs",
     "ElementIdExtensions.cs",
     r"Objects\Change.cs",
     r"Objects\RevitElement.cs",
     r"Objects\ChangeSummary.cs",
+    r"Objects\LinkState.cs",
+    r"Objects\LinkWarning.cs",
     r"Utilities\RevitUtils.cs",
     r"Utilities\DataUtility.cs",
+    r"Utilities\ResourceNames.cs",
 ]
 
 # DataUtility reads its schema-upgrade SQL from embedded resources. A runtime build has
@@ -80,6 +84,7 @@ RESOURCES = [
     ("databaseFormat.txt", "Metamorphosis.databaseFormat.txt"),
     (r"DBScript\UpgradeToV1.txt", "Metamorphosis.DBScript.UpgradeToV1.txt"),
     (r"DBScript\UpgradeToV1.1.txt", "Metamorphosis.DBScript.UpgradeToV1.1.txt"),
+    (r"DBScript\UpgradeToV1.2.txt", "Metamorphosis.DBScript.UpgradeToV1.2.txt"),
 ]
 
 
@@ -157,7 +162,11 @@ def main():
     sources = [Path.Combine(SRC, s) for s in ENGINE_SOURCES]
     sources.append(Path.Combine(DEV, "SettingsStub.cs"))
 
-    asm = compile_engine(sources, Path.Combine(OUT_DIR, "MetamorphosisEngine.dll"), defines)
+    # The output MUST be called Metamorphosis.dll. Embedded resource ids are qualified
+    # with the running assembly's own name (Utilities/ResourceNames.cs), and the ids
+    # embedded below use the "Metamorphosis." prefix, so any other output name makes
+    # every schema script unresolvable.
+    asm = compile_engine(sources, Path.Combine(OUT_DIR, "Metamorphosis.dll"), defines)
     if asm is None:
         return
     print("loaded from bytes; Location='%s' (empty means no file lock)" % asm.Location)
