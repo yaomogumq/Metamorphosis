@@ -163,18 +163,43 @@ namespace Metamorphosis.Utilities
             }
         }
 
+        private static bool _readAttempted;
+
+        /// <summary>
+        /// Load Settings.xml if it can be found, and otherwise leave <c>_doc</c> null.
+        ///
+        /// Every caller already tests for null and falls back to a default, which is the
+        /// behaviour this was written to have - but it used to throw instead. Two ways in:
+        /// the file simply not being next to the assembly, and Assembly.Location being
+        /// empty, which it is whenever the add-in was loaded from a byte array rather than
+        /// a path. The second turned a missing colour preference into an ArgumentException
+        /// out of the SnapshotMaker constructor, killing the export outright.
+        /// </summary>
         private static void readData()
         {
-            if (_doc != null) return;
+            if (_readAttempted) return;
+            _readAttempted = true;
 
-            _doc = new XmlDocument();
+            try
+            {
+                string location = Assembly.GetExecutingAssembly().Location;
+                if (String.IsNullOrEmpty(location)) return;   // loaded without a path
 
-            
-                string filename = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Settings.xml");
+                string folder = Path.GetDirectoryName(location);
+                if (String.IsNullOrEmpty(folder)) return;
 
-                _doc.Load(filename);
-            
-            
+                string filename = Path.Combine(folder, "Settings.xml");
+                if (File.Exists(filename) == false) return;
+
+                XmlDocument doc = new XmlDocument();
+                doc.Load(filename);
+                _doc = doc;
+            }
+            catch (Exception ex)
+            {
+                // Preferences are optional; defaults are correct without them.
+                System.Diagnostics.Debug.WriteLine("Could not read Settings.xml: " + ex.Message);
+            }
         }
         
     }
