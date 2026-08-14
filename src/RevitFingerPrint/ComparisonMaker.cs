@@ -301,22 +301,19 @@ namespace Metamorphosis
         }
         private Change compareElements(RevitElement current, RevitElement previous)
         {
-            // compare the parameter values
-
-            
-
+            // Both comparisons always run. An element can be moved and re-parametered in the
+            // same revision, and a quantity take-off needs to see both - reporting only the
+            // parameter change because it was tested first hides the geometric one.
             // at present, we can only compare string values
-            Change c = compareParameters(current, previous);
+            Change parameterChange = compareParameters(current, previous);
+            Change geometryChange = compareGeometry(current, previous);
 
-            if (c != null)
-            {              
-                return c;
-            }
+            if (parameterChange == null) return geometryChange;
+            if (geometryChange == null) return parameterChange;
 
-            c = compareGeometry(current, previous);
+            parameterChange.MergeFrom(geometryChange);
 
-            return c;
-
+            return parameterChange;
         }
 
         private Change buildNew(RevitElement current)
@@ -417,82 +414,50 @@ namespace Metamorphosis
 
            //old, fixed: double tolerance = 0.0006;  // decimal feet - 1/128"?
 
+            // Every axis below is tested, and they accumulate into one change record. An
+            // element that was both moved and rotated has changed in two ways and a take-off
+            // needs both of them, not just the first one we happened to look for.
+            Change c = null;
             double dist = -1;
+            double dist2 = -1;
 
-            if (didMove(current.LocationPoint, previous.LocationPoint, MoveTolerance, out dist))
+            bool movedPrimary = didMove(current.LocationPoint, previous.LocationPoint, MoveTolerance, out dist);
+            bool movedSecondary = (current.LocationPoint2 != null) && (previous.LocationPoint2 != null) &&
+                                   didMove(previous.LocationPoint2, current.LocationPoint2, MoveTolerance, out dist2);
+
+            if (movedPrimary || movedSecondary)
             {
+                c = addGeometryChange(c, current, Change.ChangeTypeEnum.Move,
+                                      "Location Offset " + getHumanComparison(movedPrimary ? dist : dist2));
 
-                Change c = new Change()
+                if (movedPrimary && movedSecondary)
                 {
-                    ChangeType = Change.ChangeTypeEnum.Move,
-                    Category = current.Category,
-                    ElementId = current.ElementId,
-                    UniqueId = current.UniqueId,
-                    ChangeDescription = "Location Offset " + getHumanComparison(dist)
-                };
-                if (current.BoundingBox != null) c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
-
-                // we want to check if the LocationPoint2 also moved?
-                if ((current.LocationPoint2 != null) && (previous.LocationPoint2 != null) &&
-                    (didMove(current.LocationPoint2, previous.LocationPoint2, MoveTolerance, out dist)))
-                {
-
                     // both moved. record both.
                     c.MoveDescription = Utilities.RevitUtils.SerializeDoubleMove(previous.LocationPoint, current.LocationPoint,
                                                                                   previous.LocationPoint2, current.LocationPoint2);
-
                 }
-                else
+                else if (movedPrimary)
                 {
                     // single move.
                     c.MoveDescription = Utilities.RevitUtils.SerializeMove(previous.LocationPoint, current.LocationPoint);
                 }
-
-                return c;
-
-            }
-
-            // only a move of the second one...
-            if ((current.LocationPoint2 != null) && (previous.LocationPoint2 != null) && 
-                    didMove(previous.LocationPoint2, current.LocationPoint2, MoveTolerance, out dist))
-            {
-                
-                    Change c = new Change()
-                    {
-                        ChangeType = Change.ChangeTypeEnum.Move,
-                        Category = current.Category,
-                        ElementId = current.ElementId,
-                        UniqueId = current.UniqueId,
-                        ChangeDescription = "Location Offset " + getHumanComparison(dist),
-                        Level = current.Level
-                    };
-                    if (current.BoundingBox != null) c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
-
-                // only one side moved though...
-                c.MoveDescription = Utilities.RevitUtils.SerializeMove(previous.LocationPoint2, current.LocationPoint2);
-                    return c;
-                
+                else
+                {
+                    // only one side moved though...
+                    c.MoveDescription = Utilities.RevitUtils.SerializeMove(previous.LocationPoint2, current.LocationPoint2);
+                }
             }
 
             // check rotation
             // old, fixed: float rotationTolerance = 0.0349f; // two degrees?
             float rotationDiff = current.Rotation - previous.Rotation;
-            
+
             if (Math.Abs(rotationDiff) > RotateTolerance)
             {
-                Change c = new Change()
-                {
-                    ChangeType = Change.ChangeTypeEnum.Rotate,
-                    Category = current.Category,
-                    ElementId = current.ElementId,
-                    UniqueId = current.UniqueId,
-                    ChangeDescription = "Rotation: " + ((rotationDiff) * 180.0 / Math.PI).ToString("F2") + " degrees",
-                    Level = current.Level
-                };
-                if (current.BoundingBox != null) c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
-                c.RotationDescription = Utilities.RevitUtils.SerializeRotation(current.LocationPoint, XYZ.BasisZ, rotationDiff);
+                c = addGeometryChange(c, current, Change.ChangeTypeEnum.Rotate,
+                                      "Rotation: " + ((rotationDiff) * 180.0 / Math.PI).ToString("F2") + " degrees");
 
-                return c;
+                c.RotationDescription = Utilities.RevitUtils.SerializeRotation(current.LocationPoint, XYZ.BasisZ, rotationDiff);
             }
 
             // now the bounding box...
@@ -501,23 +466,76 @@ namespace Metamorphosis
                 double maxDist = Math.Max(current.BoundingBox.Min.DistanceTo(previous.BoundingBox.Min),
                                            current.BoundingBox.Max.DistanceTo(previous.BoundingBox.Max));
 
-                if (maxDist > MoveTolerance)
+                double sizeDelta = -1;
+                bool resized = didResize(current.BoundingBox, previous.BoundingBox, MoveTolerance, out sizeDelta);
+
+                // Rotating an element changes the extents of its axis-aligned bounding box
+                // without the element itself changing size, and the box alone cannot tell the
+                // two apart - so once a rotation is reported, a size difference proves nothing.
+                bool rotated = (c != null) && c.HasChangeType(Change.ChangeTypeEnum.Rotate);
+
+                // A box that only shifted is just a restatement of the move or rotation already
+                // reported above, so it stays suppressed as noise - that part of the original
+                // behaviour is deliberate. A box whose SIZE changed is a different fact: the
+                // element itself got bigger or smaller, which changes quantities, so it is
+                // always reported whether or not the element also moved.
+                if (resized && (rotated == false))
                 {
-                    Change c = new Change()
-                    {
-                        ChangeType = Change.ChangeTypeEnum.GeometryChange,
-                        Category = current.Category,
-                        ElementId = current.ElementId,
-                        UniqueId = current.UniqueId,
-                        ChangeDescription = "BoundingBox Offset " + getHumanComparison(maxDist),
-                    };
-                    c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
-                    return c;
+                    c = addGeometryChange(c, current, Change.ChangeTypeEnum.GeometryChange,
+                                          "BoundingBox Size Change " + getHumanComparison(sizeDelta));
+                }
+                else if ((c == null) && (maxDist > MoveTolerance))
+                {
+                    c = addGeometryChange(c, current, Change.ChangeTypeEnum.GeometryChange,
+                                          "BoundingBox Offset " + getHumanComparison(maxDist));
                 }
             }
 
-            return null;
+            return c;
 
+        }
+
+        /// <summary>
+        /// Start a geometric change record, or fold another change type into the one already
+        /// started for this element, so that a compound geometric edit stays a single record.
+        /// </summary>
+        private Change addGeometryChange(Change existing, RevitElement current, Change.ChangeTypeEnum type, string description)
+        {
+            if (existing != null)
+            {
+                existing.AddChangeType(type);
+                existing.ChangeDescription = existing.ChangeDescription + "; " + description;
+                return existing;
+            }
+
+            Change c = new Change()
+            {
+                ChangeType = type,
+                Category = current.Category,
+                ElementId = current.ElementId,
+                UniqueId = current.UniqueId,
+                ChangeDescription = description,
+                Level = current.Level
+            };
+            if (current.BoundingBox != null) c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
+
+            return c;
+        }
+
+        /// <summary>
+        /// Did the element's bounding box change size, as opposed to just moving? Size is what
+        /// a quantity take-off cares about, and it survives the element also having been moved.
+        /// </summary>
+        private bool didResize(BoundingBoxXYZ current, BoundingBoxXYZ previous, double tolerance, out double delta)
+        {
+            XYZ currentSize = current.Max - current.Min;
+            XYZ previousSize = previous.Max - previous.Min;
+
+            delta = Math.Max(Math.Abs(currentSize.X - previousSize.X),
+                    Math.Max(Math.Abs(currentSize.Y - previousSize.Y),
+                             Math.Abs(currentSize.Z - previousSize.Z)));
+
+            return delta > tolerance;
         }
 
         private bool didMove(XYZ oldPoint, XYZ newPoint, double tolerance, out double distance)
