@@ -2,7 +2,7 @@
 <RevitAddIns>
   <AddIn Type="Application">
     <Name>Revit Metamorphosis</Name>
-    <Assembly>.\Metamorphosis\MetamorphosisCore.dll</Assembly>
+    <Assembly>.\Metamorphosis\Metamorphosis.dll</Assembly>
     <AddInId>3d647582-3529-4cfe-a977-00ce3dd86b7a</AddInId>
     <FullClassName>Metamorphosis.ExternalApp</FullClassName>
     <VendorId>HACK</VendorId>
