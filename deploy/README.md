@@ -45,22 +45,24 @@ The manifest sits *beside* the payload folder, not inside it, and refers to
 
 ## What gets installed
 
-About 1.3 MB:
+About **4.5 MB**, most of it the native SQLite interop:
 
 ```
 Metamorphosis.addin
 Metamorphosis\
-    Metamorphosis.dll          the add-in
-    Metamorphosis.dll.config
-    Settings.xml               colours and tolerances; optional, defaults apply without it
-    Newtonsoft.Json.dll
-    System.Data.SQLite.dll
-    x64\SQLite.Interop.dll     native, architecture-specific
-    x86\SQLite.Interop.dll
+    Metamorphosis.dll           138 KB   the add-in
+    Metamorphosis.dll.config      1 KB
+    Metamorphosis.pdb            41 KB   symbols; drop it if you prefer
+    Settings.xml                  1 KB   colours and tolerances; optional, defaults apply without it
+    Newtonsoft.Json.dll         695 KB
+    System.Data.SQLite.dll      421 KB
+    x64\SQLite.Interop.dll     1786 KB   native, architecture-specific
+    x86\SQLite.Interop.dll     1413 KB
 ```
 
-The `x64`/`x86` folders are easy to miss when copying by hand: without them
-`System.Data.SQLite` loads happily and then fails at the first query.
+The `x64`/`x86` folders are the easy thing to miss when copying by hand — they are 71% of
+the payload, and without them `System.Data.SQLite` loads happily and then fails at the
+first query.
 
 ## Why not the MSI
 
