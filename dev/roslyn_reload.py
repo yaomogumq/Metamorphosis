@@ -4,59 +4,66 @@ Runtime-compile the Metamorphosis diff engine inside a running Revit and run it,
 without rebuilding the add-in in Visual Studio and without restarting Revit.
 
 Run through the Revit MCP (execute_revit_code). Edit the C# on disk, run this, read
-the JSON. Seconds per iteration instead of a rebuild-and-restart cycle.
+the result. VERIFIED on HT2524 / Revit 2024.2 / .NET Framework 4.8:
+compile 0.49s, compare 1.5s for one category. Compare that with a VS rebuild plus a
+Revit restart on a 55,000-element model.
 
 WHY ROSLYN AND NOT CodeDom
     CSharpCodeProvider is frozen at C#5. This project declares LangVersion 7.3 and its
     source uses C#6+ (string interpolation, auto-property initialisers), so CodeDom
     cannot compile it at all - and CodeDom does not exist on .NET 8 (Revit 2025+).
-    Roslyn compiles the real source unmodified and covers both runtimes.
 
 WHY csc.exe RATHER THAN HOSTING ROSLYN IN-PROCESS
-    Same compiler, far fewer failure modes. Hosting Microsoft.CodeAnalysis inside
-    Revit on .NET Framework 4.8 usually means deploying ~8 DLLs and fighting binding
-    redirects for System.Collections.Immutable / System.Reflection.Metadata against
-    whatever Revit already loaded. Shelling out has none of that, and the exact
-    command below can be pasted into a terminal when something goes wrong.
+    Same compiler, far fewer failure modes. This machine proves the point: pyRevit has
+    already loaded Microsoft.CodeAnalysis 4.10, and System.Collections.Immutable is
+    loaded TWICE at different versions (1.2.5 from Revit, 8.0.0 from pyRevit). Hosting
+    Roslyn in-process would have to be reconciled against that. Shelling out does not.
 
 WHY THE DLL IS LOADED FROM BYTES
     Revit loads add-ins with Assembly.LoadFrom, which holds a file lock and caches the
     assembly for the AppDomain's life - that is what forces the restart. Assembly.Load
-    (byte[]) holds no handle, so the file can be recompiled immediately, and each call
-    produces a genuinely new assembly.
+    (byte[]) holds no handle; the loaded assembly's Location comes back empty.
 
-KNOWN LIMITS
-    - .NET Framework cannot unload assemblies. Every run leaves the previous copy in
+LIMITS
+    - .NET Framework cannot unload assemblies, so each run leaves the previous copy in
       memory. Harmless for a dev loop; restart Revit every few hours.
-    - The compiled types have different identity from the ribbon-loaded ones despite
-      identical names. Never cast between them. This harness never needs to: the
-      engine hands results back as a JSON file.
-    - Written and verified for Revit 2024 / .NET Framework 4.8. On Revit 2025+ (.NET 8)
-      the framework references below must point at the .NET ref-pack instead, and csc
-      is invoked as "dotnet <sdk>/Roslyn/bincore/csc.dll". See notes at REFERENCES.
+    - Compiled types have different identity from the ribbon-loaded ones despite
+      identical names. Never cast between them.
+    - Verified for Revit 2024 / .NET Framework 4.8. On Revit 2025+ (.NET 8) point the
+      framework references at the .NET ref-pack and invoke csc as
+      "dotnet <sdk>\\Roslyn\\bincore\\csc.dll". See REFERENCES below.
 """
 
 import System
-import clr
-import os
-from System import Environment, Array, String
 from System.IO import Path, File, Directory
 from System.Diagnostics import Process, ProcessStartInfo
-from System.Reflection import Assembly, BindingFlags
+from System.Reflection import Assembly
+from System.Collections.Generic import List
+from Autodesk.Revit.DB import Category, BuiltInCategory
 
 # ----------------------------------------------------------------------------------
-# CONFIGURE: point these at your checkout and the snapshot you want to compare against
+# CONFIGURE
 # ----------------------------------------------------------------------------------
-SRC_ROOT = r"C:\Users\jacky.luk\source\Metamorphosis\src\MetamorphosisCore"
-DEV_DIR = r"C:\Users\jacky.luk\source\Metamorphosis\dev"
-PREVIOUS_SNAPSHOT = r""      # a .db/.sdb snapshot; leave "" to only compile
+REPO = r"C:\Users\HT2524\source\Metamorphosis"
 OUT_DIR = r"C:\Temp\metamorphosis-dev"
+PREVIOUS_SNAPSHOT = Path.Combine(OUT_DIR, "baseline.sdb")   # "" = compile-only
+CSC = r"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\Roslyn\csc.exe"
+ADDIN = r"C:\Users\HT2524\AppData\Roaming\Autodesk\Revit\Addins\2024\Metamorphosis"
+REVIT_DIR = r"C:\Program Files\Autodesk\Revit 2024"
+
+# Narrow the compare to keep the loop fast. None = every category.
+ONLY_CATEGORY = BuiltInCategory.OST_StructuralFraming
 
 MOVE_TOLERANCE = 0.0006      # decimal feet
 ROTATE_TOLERANCE = 0.0349    # radians, ~2 degrees
 
-# The diff engine's dependency closure. Deliberately excludes every UI file - none of
-# these need WinForms - and excludes Utilities/Settingcs.cs, replaced by SettingsStub.
+SRC = Path.Combine(REPO, r"src\MetamorphosisCore")
+DEV = Path.Combine(REPO, "dev")
+FX = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319"
+
+# The diff engine's dependency closure. No WinForms, no Drawing - but RevitAPIUI IS
+# needed: RevitUtils.GetExtents takes an Autodesk.Revit.UI.UIApplication, written
+# fully-qualified inline rather than through a using, so grepping the usings misses it.
 ENGINE_SOURCES = [
     "ComparisonMaker.cs",
     "ElementIdExtensions.cs",
@@ -67,8 +74,8 @@ ENGINE_SOURCES = [
     r"Utilities\DataUtility.cs",
 ]
 
-# DataUtility reads its schema-upgrade SQL out of embedded resources. A runtime build
-# has none unless we embed them, and the resource IDs must match what it asks for.
+# DataUtility reads its schema-upgrade SQL from embedded resources. A runtime build has
+# none unless we embed them, and the ids must match exactly what it asks for.
 RESOURCES = [
     ("databaseFormat.txt", "Metamorphosis.databaseFormat.txt"),
     (r"DBScript\UpgradeToV1.txt", "Metamorphosis.DBScript.UpgradeToV1.txt"),
@@ -76,188 +83,133 @@ RESOURCES = [
 ]
 
 
-def find_csc():
-    """Locate a Roslyn csc.exe. NOT the in-box Framework64 one - that is C#5."""
-    cands = []
-    for pf in [r"C:\Program Files", r"C:\Program Files (x86)"]:
-        for ver in ["2022", "2019"]:
-            for ed in ["Enterprise", "Professional", "Community", "BuildTools", "Preview"]:
-                cands.append(r"%s\Microsoft Visual Studio\%s\%s\MSBuild\Current\Bin\Roslyn\csc.exe"
-                             % (pf, ver, ed))
-    for c in cands:
-        if File.Exists(c):
-            return c
-    return None
+def asc(x):
+    """pyRevit's routes handler serialises the response with an ASCII JSON encoder. One
+    non-ASCII byte anywhere in the output - a degree sign in a parameter value, a CJK
+    character in a family name - throws AFTER the code has already run, so the work
+    happens but the result is lost. Everything printed goes through here."""
+    if x is None:
+        return "None"
+    return "".join([c if 32 <= ord(c) < 127 else "?" for c in str(x)])
 
 
-def loaded_assembly_path(simple_name):
-    for a in System.AppDomain.CurrentDomain.GetAssemblies():
-        try:
-            if a.GetName().Name == simple_name:
-                loc = a.Location
-                if loc:
-                    return loc
-        except Exception:
-            pass
-    return None
+def compile_engine(sources, out_dll, defines):
+    refs = [Path.Combine(FX, n) for n in
+            ["mscorlib.dll", "System.dll", "System.Core.dll", "System.Data.dll", "System.Xml.dll"]]
+    # REFERENCES: on Revit 2025+ swap the five above for the .NET ref-pack equivalents.
+    refs += [Path.Combine(REVIT_DIR, "RevitAPI.dll"),
+             Path.Combine(REVIT_DIR, "RevitAPIUI.dll"),
+             Path.Combine(ADDIN, "System.Data.SQLite.dll"),
+             Path.Combine(ADDIN, "Newtonsoft.Json.dll")]
 
-
-def main():
-    app = doc.Application
-    revit_year = int(app.VersionNumber)
-    print("Revit %s, CLR %s" % (revit_year, Environment.Version))
-
-    csc = find_csc()
-    if not csc:
-        print("")
-        print("ERROR: no Roslyn csc.exe found. Run dev/probe_env.py for the full report.")
-        print("Install the .NET SDK or VS Build Tools, or host Roslyn in-process instead.")
-        return
-    print("csc: %s" % csc)
-
-    # ---- REFERENCES -------------------------------------------------------------
-    # RevitAPI comes from the running process, so the compile always matches the host.
-    revit_api = loaded_assembly_path("RevitAPI")
-    addin_dir = Path.GetDirectoryName(loaded_assembly_path("Metamorphosis") or revit_api)
-    fx = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319"   # Revit 2025+: use the .NET ref pack
-
-    refs = [
-        Path.Combine(fx, "mscorlib.dll"),
-        Path.Combine(fx, "System.dll"),
-        Path.Combine(fx, "System.Core.dll"),
-        Path.Combine(fx, "System.Data.dll"),
-        Path.Combine(fx, "System.Xml.dll"),
-        revit_api,
-        Path.Combine(addin_dir, "System.Data.SQLite.dll"),
-        Path.Combine(addin_dir, "Newtonsoft.Json.dll"),
-    ]
-    missing = [r for r in refs if not File.Exists(r)]
+    missing = [r for r in refs if not File.Exists(r)] + [s for s in sources if not File.Exists(s)]
     if missing:
-        print("")
-        print("ERROR: missing compile references:")
+        print("MISSING:")
         for m in missing:
-            print("   " + m)
-        return
+            print("   " + asc(m))
+        return None
 
-    # ---- SOURCES ----------------------------------------------------------------
-    sources = [Path.Combine(SRC_ROOT, s) for s in ENGINE_SOURCES]
-    sources.append(Path.Combine(DEV_DIR, "SettingsStub.cs"))
-    missing = [s for s in sources if not File.Exists(s)]
-    if missing:
-        print("")
-        print("ERROR: missing source files (check SRC_ROOT):")
-        for m in missing:
-            print("   " + m)
-        return
-
-    # ---- DEFINES ----------------------------------------------------------------
-    # ComparisonMaker branches on these. LONGELEMENTIDS is set from 2024 on, matching
-    # the csproj - get it wrong and ElementId construction fails to compile.
-    defines = ["REVIT%d" % revit_year]
-    if revit_year >= 2024:
-        defines.append("LONGELEMENTIDS")
-
-    if not Directory.Exists(OUT_DIR):
-        Directory.CreateDirectory(OUT_DIR)
-    out_dll = Path.Combine(OUT_DIR, "MetamorphosisEngine.dll")
-
-    args = ["/target:library", "/langversion:7.3", "/nostdlib+", "/optimize-", "/debug:portable",
-            "/out:\"%s\"" % out_dll, "/define:%s" % ";".join(defines)]
+    args = ["/target:library", "/langversion:7.3", "/nostdlib+", "/optimize-",
+            "/preferreduilang:en-US",     # else diagnostics arrive in the OS language
+            '/out:"%s"' % out_dll, "/define:%s" % ";".join(defines)]
     for r in refs:
-        args.append("/reference:\"%s\"" % r)
-    for rel, resid in RESOURCES:
-        full = Path.Combine(SRC_ROOT, rel)
-        if File.Exists(full):
-            args.append("/resource:\"%s\",%s" % (full, resid))
+        args.append('/reference:"%s"' % r)
+    for rel, rid in RESOURCES:
+        f = Path.Combine(SRC, rel)
+        if File.Exists(f):
+            args.append('/resource:"%s",%s' % (f, rid))
     for s in sources:
-        args.append("\"%s\"" % s)
+        args.append('"%s"' % s)
 
-    # ---- COMPILE ----------------------------------------------------------------
-    psi = ProcessStartInfo(csc, " ".join(args))
+    psi = ProcessStartInfo(CSC, " ".join(args))
     psi.UseShellExecute = False
     psi.RedirectStandardOutput = True
     psi.RedirectStandardError = True
     psi.CreateNoWindow = True
+
+    t0 = System.DateTime.Now
     p = Process.Start(psi)
-    stdout = p.StandardOutput.ReadToEnd()
-    stderr = p.StandardError.ReadToEnd()
+    out = p.StandardOutput.ReadToEnd()
+    err = p.StandardError.ReadToEnd()
     p.WaitForExit()
+    took = System.DateTime.Now - t0
 
     if p.ExitCode != 0:
-        print("")
         print("COMPILE FAILED (exit %d)" % p.ExitCode)
-        print(stdout)
-        print(stderr)
+        print(asc(out)[:4000])
+        print(asc(err)[:1500])
+        return None
+
+    print("compiled in %s -> %s (%d bytes)" % (took, asc(out_dll), System.IO.FileInfo(out_dll).Length))
+    return Assembly.Load(File.ReadAllBytes(out_dll))   # no file lock, no restart
+
+
+def main():
+    year = int(doc.Application.VersionNumber)
+    defines = ["REVIT%d" % year]
+    if year >= 2024:
+        defines.append("LONGELEMENTIDS")     # matches the csproj; 2024 onward
+    print("Revit %d   defines: %s" % (year, ";".join(defines)))
+
+    if not Directory.Exists(OUT_DIR):
+        Directory.CreateDirectory(OUT_DIR)
+
+    sources = [Path.Combine(SRC, s) for s in ENGINE_SOURCES]
+    sources.append(Path.Combine(DEV, "SettingsStub.cs"))
+
+    asm = compile_engine(sources, Path.Combine(OUT_DIR, "MetamorphosisEngine.dll"), defines)
+    if asm is None:
         return
-    print("compiled OK -> %s" % out_dll)
+    print("loaded from bytes; Location='%s' (empty means no file lock)" % asm.Location)
 
-    # ---- LOAD FROM BYTES (no file lock, no restart) ------------------------------
-    asm = Assembly.Load(File.ReadAllBytes(out_dll))
-    print("loaded assembly: %s" % asm.FullName)
-
-    if not PREVIOUS_SNAPSHOT:
+    if not PREVIOUS_SNAPSHOT or not File.Exists(PREVIOUS_SNAPSHOT):
         print("")
-        print("PREVIOUS_SNAPSHOT is empty - compile-only run. Set it to compare.")
-        return
-    if not File.Exists(PREVIOUS_SNAPSHOT):
-        print("")
-        print("ERROR: snapshot not found: %s" % PREVIOUS_SNAPSHOT)
+        print("No snapshot set - compile-only run.")
+        print("Take one with the installed add-in: Metamorphosis.Snapshot.Export(doc, path)")
         return
 
-    # ---- RUN --------------------------------------------------------------------
-    cm_type = asm.GetType("Metamorphosis.ComparisonMaker")
-    cm = System.Activator.CreateInstance(cm_type, Array[object]([doc, PREVIOUS_SNAPSHOT]))
-    cm_type.GetProperty("MoveTolerance").SetValue(cm, MOVE_TOLERANCE, None)
-    cm_type.GetProperty("RotateTolerance").SetValue(cm, System.Single(ROTATE_TOLERANCE), None)
-    cm_type.GetProperty("AllCategories").SetValue(cm, True, None)
+    cmt = asm.GetType("Metamorphosis.ComparisonMaker")
+    cm = System.Activator.CreateInstance(cmt, System.Array[object]([doc, PREVIOUS_SNAPSHOT]))
+    cmt.GetProperty("MoveTolerance").SetValue(cm, MOVE_TOLERANCE, None)
+    cmt.GetProperty("RotateTolerance").SetValue(cm, System.Single(ROTATE_TOLERANCE), None)
+    if ONLY_CATEGORY is not None:
+        cmt.GetProperty("AllCategories").SetValue(cm, False, None)
+        cats = List[Category]()
+        cats.Add(doc.Settings.Categories.get_Item(ONLY_CATEGORY))
+        cmt.GetProperty("RequestedCategories").SetValue(cm, cats, None)
 
-    changes = cm_type.GetMethod("Compare").Invoke(cm, None)
-    count = changes.Count
-    print("")
-    print("changes found: %d" % count)
+    t0 = System.DateTime.Now
+    changes = cmt.GetMethod("Compare").Invoke(cm, None)
+    print("compared in %s: %d change(s)" % (System.DateTime.Now - t0, changes.Count))
 
-    json_path = Path.Combine(OUT_DIR, "changes-dev.json")
-    ser = cm_type.GetMethod("Serialize", Array[System.Type]([System.String, changes.GetType()]))
-    if ser is None:
-        for m in cm_type.GetMethods():
-            if m.Name == "Serialize" and len(m.GetParameters()) == 2:
-                ser = m
-                break
-    ser.Invoke(cm, Array[object]([json_path, changes]))
-    print("json written: %s" % json_path)
-
-    # ---- SUMMARISE the thing this whole exercise exists to verify ----------------
-    # Item 1 of the revamp: an element that changed in several ways must now report
-    # every one of them, not just whichever was detected first.
-    change_type = asm.GetType("Metamorphosis.Objects.Change")
-    types_prop = change_type.GetProperty("ChangeTypes")
-    desc_prop = change_type.GetProperty("ChangeTypeDescription")
-
-    if types_prop is None:
-        print("")
-        print("NOTE: this build has no ChangeTypes property - it predates the item 1 fix.")
+    cht = asm.GetType("Metamorphosis.Objects.Change")
+    p_types = cht.GetProperty("ChangeTypes")
+    if p_types is None:
+        print("This build predates the item-1 fix (no ChangeTypes property).")
         return
+    p_id = cht.GetProperty("ElementId")
+    p_desc = cht.GetProperty("ChangeTypeDescription")
+    p_cd = cht.GetProperty("ChangeDescription")
 
+    hist = {}
     compound = 0
-    histogram = {}
-    for i in range(count):
+    for i in range(changes.Count):
         c = changes[i]
-        tl = types_prop.GetValue(c, None)
-        n = tl.Count
-        histogram[n] = histogram.get(n, 0) + 1
+        n = p_types.GetValue(c, None).Count
+        hist[n] = hist.get(n, 0) + 1
         if n > 1:
             if compound < 10:
-                print("   compound: id=%s  %s" % (
-                    change_type.GetProperty("ElementId").GetValue(c, None),
-                    desc_prop.GetValue(c, None)))
+                print("   compound: id=%s  %s  |  %s" % (
+                    asc(p_id.GetValue(c, None)), asc(p_desc.GetValue(c, None)),
+                    asc(p_cd.GetValue(c, None))[:110]))
             compound += 1
 
     print("")
     print("elements by number of change types:")
-    for k in sorted(histogram.keys()):
-        print("   %d type(s): %d element(s)" % (k, histogram[k]))
+    for k in sorted(hist.keys()):
+        print("   %d type(s): %d element(s)" % (k, hist[k]))
     print("")
-    print("compound changes: %d  (before the fix this was always 0)" % compound)
+    print("compound changes: %d   (structurally always 0 before the item-1 fix)" % compound)
 
 
 main()

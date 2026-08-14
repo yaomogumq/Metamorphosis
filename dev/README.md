@@ -41,12 +41,16 @@ in-process hosting is the fallback — `probe_env.py` reports which applies.
    reports the Revit/CLR version, hunts for a Roslyn `csc.exe`, checks whether any
    Roslyn assemblies are already loaded in Revit's AppDomain, and locates `RevitAPI.dll`
    and the add-in folder. Which compiler exists decides the design, so do not guess.
-2. **Edit the paths at the top of `roslyn_reload.py`** — `SRC_ROOT`, `DEV_DIR`,
-   `PREVIOUS_SNAPSHOT`, `OUT_DIR`.
-3. **Run `roslyn_reload.py`** through `execute_revit_code`. It compiles, loads from
-   bytes, runs `ComparisonMaker.Compare()` against your snapshot, writes JSON, and
-   prints a histogram of how many change types each element carries.
-4. **Edit C#, re-run step 3.** No rebuild, no restart.
+2. **Check the paths at the top of `roslyn_reload.py`.** They are set for HT2524; only
+   `REPO`, `ADDIN` and `CSC` change between machines.
+3. **Take a baseline snapshot** with the installed add-in — no rebuild needed:
+   `Metamorphosis.Snapshot.Export(doc, r"C:\Temp\metamorphosis-dev\baseline.sdb")`.
+4. **Optionally plant a known compound change** with `doctor_snapshot.py`, which edits
+   the *snapshot* rather than the model, so nothing in Revit is touched.
+5. **Run `roslyn_reload.py`.** It compiles, loads from bytes, runs
+   `ComparisonMaker.Compare()`, and prints a histogram of how many change types each
+   element carries.
+6. **Edit C#, re-run step 5.** No rebuild, no restart. About two seconds a lap.
 
 Leave `PREVIOUS_SNAPSHOT` empty for a compile-only smoke test.
 
@@ -84,11 +88,50 @@ have under-reported.
   references must point at the .NET ref-pack and `csc` is invoked as
   `dotnet <sdk>\Roslyn\bincore\csc.dll`. Marked in the script at `REFERENCES`.
 
-## Verification status
+## Verification status — VERIFIED end to end
 
-Written on macOS with no Revit available, so **nothing here has been executed against a
-running Revit**. What has been checked: the 8-file compile unit is closed (only
-`Settings` reaches outside it, and the stub covers that — no UI, WinForms or Drawing
-references), and all eight files parse cleanly under Roslyn with `REVIT2024;LONGELEMENTIDS`
-as well as under 2026, 2023 and 2019 symbol sets. Neither substitutes for a real run;
-expect first-run friction in path configuration.
+Run on **HT2524 / Revit 2024.2 / .NET Framework 4.8** against a real 55,110-element
+structural model, over the Revit MCP.
+
+| Step | Result |
+|---|---|
+| Runtime compile (8 files) | **0.49 s** |
+| Load from bytes | `Assembly.Location` empty — no file lock, no restart |
+| Embedded resources | all three present with the right ids |
+| Compare (Structural Framing) | **1.5 s** |
+| Baseline snapshot export | 27 MB / 29 s — see note on item 3 below |
+
+### The A/B that proves item 1
+
+`doctor_snapshot.py` planted one compound change — element **950146** moved 1 ft *and*
+had its `Comments` parameter altered. The same comparison was then run twice, against
+engines compiled from the pre-fix `master` and from the fixed branch:
+
+```
+OLD (master)   ChangeType  : ParameterChange
+               Description : Comments From: DOCTORED-BASELINE to
+               MoveDescription: None          <-- the 1 ft move is simply gone
+
+NEW (branch)   ChangeTypes : ParameterChange + Move
+               Description : Comments From: DOCTORED-BASELINE to ; Location Offset 30.48cm
+```
+
+That missing move is the take-off blind spot, reproduced and then closed.
+
+### Three things the live run corrected
+
+Found only by compiling for real — worth knowing before trusting a static check:
+
+- **`RevitAPIUI.dll` is required.** `RevitUtils.GetExtents` takes an
+  `Autodesk.Revit.UI.UIApplication`, written fully-qualified inline rather than through
+  a `using`, so grepping the using-lines said "no UI dependency" and the first compile
+  failed on it.
+- **`/preferreduilang:en-US` matters.** Compiler diagnostics came back in the machine's
+  OS language (Chinese), which makes automated error handling unreliable.
+- **All MCP output must be ASCII.** pyRevit's routes handler serialises responses with
+  an ASCII JSON encoder, so a single degree sign in a parameter value throws *after*
+  the code has already run — the work happens and the result is lost. Every print goes
+  through an `asc()` filter.
+
+Incidental datapoint for revamp item 3: a snapshot export of 55,110 elements /
+407,831 EAV rows took **29 seconds**, all of it single-threaded one-INSERT-per-row.
