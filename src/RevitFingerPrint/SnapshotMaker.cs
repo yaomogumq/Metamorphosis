@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Autodesk.Revit.DB;
+using System.Data;
 using System.Data.SQLite;
 using System.IO;
 using System.Reflection;
@@ -192,14 +193,26 @@ namespace Metamorphosis
                 {
                     conn.Open();
                     using (var transaction = conn.BeginTransaction())
+                    using (var cmd = conn.CreateCommand())
                     {
+                        cmd.CommandText = "INSERT INTO _objects_id (id,external_id,category,isType,versionguid) VALUES(?,?,?,?,?)";
+                        var idParam = cmd.Parameters.Add("id", DbType.Int64);
+                        var externalParam = cmd.Parameters.Add("external_id", DbType.String);
+                        var categoryParam = cmd.Parameters.Add("category", DbType.String);
+                        var isTypeParam = cmd.Parameters.Add("isType", DbType.Int32);
+                        var versionParam = cmd.Parameters.Add("versionguid", DbType.String);
+                        currentQuery = cmd.CommandText;
+                        cmd.Prepare();
+
+                        isTypeParam.Value = isTypes ? 1 : 0;
+
                         foreach (Element e in elements)
                         {
-                            string versionGuid = "NULL";
+                            object versionGuid = DBNull.Value;
 #if REVIT2015 || REVIT2016 || REVIT2017 || REVIT2018 || REVIT2019 || REVIT2020
                             // we do nothing
 #else
-                            if (e.VersionGuid != null) versionGuid = String.Format("'{0}'", e.VersionGuid);
+                            if (e.VersionGuid != null) versionGuid = e.VersionGuid.ToString();
 #endif
                             Category c = e.Category;
                             if (c == null)
@@ -207,11 +220,14 @@ namespace Metamorphosis
                                 FamilySymbol fs = e as FamilySymbol;
                                 if (fs != null) c = fs.Family.FamilyCategory;
                             }
+                            // No quote doubling needed now the value is bound rather than
+                            // interpolated - a category with an apostrophe is just data.
                             string catName = (c != null) ? c.Name : "(none)";
-                            if (catName.Contains("'")) catName = catName.Replace("'", "''");
-                            var cmd = conn.CreateCommand();
-                            cmd.CommandText = String.Format("INSERT INTO _objects_id (id,external_id,category,isType,versionguid) VALUES({0},'{1}','{2}',{3},{4})", e.Id.AsLong(), e.UniqueId, catName, (isTypes) ? 1 : 0, versionGuid);
-                            currentQuery = cmd.CommandText;
+
+                            idParam.Value = e.Id.AsLong();
+                            externalParam.Value = e.UniqueId;
+                            categoryParam.Value = catName;
+                            versionParam.Value = versionGuid;
 
                             cmd.ExecuteNonQuery();
                         }
@@ -239,15 +255,21 @@ namespace Metamorphosis
 
                     conn.Open();
                     using (var transaction = conn.BeginTransaction())
+                    using (var cmd = conn.CreateCommand())
                     {
+                        // Also closes a latent bug: the old code escaped the value into a
+                        // local and then interpolated the UNescaped one, so a model path or
+                        // user name containing an apostrophe produced invalid SQL.
+                        cmd.CommandText = "INSERT INTO _objects_header (keyword,value) VALUES(?,?)";
+                        var keywordParam = cmd.Parameters.Add("keyword", DbType.String);
+                        var valueParam = cmd.Parameters.Add("value", DbType.String);
+                        currentQuery = cmd.CommandText;
+                        cmd.Prepare();
+
                         foreach (var pair in _headerDict)
                         {
-
-                            var cmd = conn.CreateCommand();
-                            string val = pair.Value.Replace("'", "''");
-
-                            cmd.CommandText = String.Format("INSERT INTO _objects_header (keyword,value) VALUES('{0}','{1}')", pair.Key, pair.Value);
-                            currentQuery = cmd.CommandText;
+                            keywordParam.Value = pair.Key;
+                            valueParam.Value = pair.Value;
 
                             cmd.ExecuteNonQuery();
                         }
@@ -272,25 +294,35 @@ namespace Metamorphosis
                 {
                     conn.Open();
                     using (var transaction = conn.BeginTransaction())
+                    using (var cmd = conn.CreateCommand())
                     {
+                        cmd.CommandText = "INSERT INTO _objects_attr (id,name,category,data_type) VALUES(?,?,?,?)";
+                        var idParam = cmd.Parameters.Add("id", DbType.Int64);
+                        var nameParam = cmd.Parameters.Add("name", DbType.String);
+                        var categoryParam = cmd.Parameters.Add("category", DbType.String);
+                        var dataTypeParam = cmd.Parameters.Add("data_type", DbType.Int32);
+                        currentQuery = cmd.CommandText;
+                        cmd.Prepare();
+
+                        dataTypeParam.Value = -1;
+
                         foreach (var pair in _paramDict)
                         {
                             string name = pair.Value.Definition.Name;
-                            if (name.Contains("'")) name = name.Replace("'", "''");
-                            var cmd = conn.CreateCommand();
 
 #if REVIT2015 || REVIT2016 || REVIT2017 || REVIT2018 || REVIT2019 || REVIT2020 || REVIT2021 || REVIT2022 || REVIT2023
-                            var group = LabelUtils.GetLabelFor(pair.Value.Definition.ParameterGroup).Replace("'", "''");
+                            var group = LabelUtils.GetLabelFor(pair.Value.Definition.ParameterGroup);
                             // maybe we don't need? (int)pair.Value.Definition.ParameterGroup
 #else  // newer
-                            //var group = LabelUtils.GetLabelFor(pair.Value.Definition.ParameterGroup).Replace("'", "''");
+                            //var group = LabelUtils.GetLabelFor(pair.Value.Definition.ParameterGroup);
                             var groupForgeId = pair.Value.Definition.GetGroupTypeId();
                             var group = LabelUtils.GetLabelForGroup(groupForgeId);
                             // maybe we don't need the PArameterGroupId?
 
 #endif
-                            cmd.CommandText = String.Format("INSERT INTO _objects_attr (id,name,category,data_type) VALUES({0},'{1}','{2}',{3})", pair.Value.Id.AsLong(), name, group,-1 );
-                            currentQuery = cmd.CommandText;
+                            idParam.Value = pair.Value.Id.AsLong();
+                            nameParam.Value = name;
+                            categoryParam.Value = group;
 
                             cmd.ExecuteNonQuery();
                         }
@@ -316,13 +348,18 @@ namespace Metamorphosis
                 {
                     conn.Open();
                     using (var transaction = conn.BeginTransaction())
+                    using (var cmd = conn.CreateCommand())
                     {
+                        cmd.CommandText = "INSERT INTO _objects_val (id,value) VALUES(?,?)";
+                        var idParam = cmd.Parameters.Add("id", DbType.Int32);
+                        var valueParam = cmd.Parameters.Add("value", DbType.String);
+                        currentQuery = cmd.CommandText;
+                        cmd.Prepare();
+
                         foreach (var pair in _valueDict)
                         {
-                            string val = pair.Key;
-                            if (val.Contains("'")) val = val.Replace("'", "''"); // need to escape single quotes.
-                            var cmd = conn.CreateCommand();
-                            cmd.CommandText = String.Format("INSERT INTO _objects_val (id,value) VALUES({0},'{1}')", pair.Value, val);
+                            idParam.Value = pair.Value;
+                            valueParam.Value = pair.Key;
 
                             cmd.ExecuteNonQuery();
                         }
@@ -351,11 +388,22 @@ namespace Metamorphosis
 
                     conn.Open();
                     using (var transaction = conn.BeginTransaction())
+                    // One prepared statement reused for every row. This loop runs once per
+                    // parameter per element - over 400,000 times on a real model - and building
+                    // then parsing a fresh SQL string each time dominated the whole export.
+                    using (var cmd = conn.CreateCommand())
                     {
+                        cmd.CommandText = "INSERT INTO _objects_eav (entity_id,attribute_id,value_id) VALUES(?,?,?)";
+                        var entityParam = cmd.Parameters.Add("entity_id", DbType.Int64);
+                        var attributeParam = cmd.Parameters.Add("attribute_id", DbType.Int64);
+                        var valueParam = cmd.Parameters.Add("value_id", DbType.Int32);
+                        currentQuery = cmd.CommandText;
+                        cmd.Prepare();
 
                         foreach (Element e in elems)
                         {
                             IList<Parameter> parms = Utilities.RevitUtils.GetParameters(e);
+                            long elementId = e.Id.AsLong();
 
                             foreach (var p in parms)
                             {
@@ -383,10 +431,9 @@ namespace Metamorphosis
                                     _valueDict.Add(val, _valueId);
                                 }
 
-
-                                var cmd = conn.CreateCommand();
-                                cmd.CommandText = String.Format("INSERT INTO _objects_eav (entity_id,attribute_id,value_id) VALUES({0},{1},{2})", e.Id.AsLong(), p.Id.AsLong(), _valueDict[val]);
-                                currentQuery = cmd.CommandText;
+                                entityParam.Value = elementId;
+                                attributeParam.Value = p.Id.AsLong();
+                                valueParam.Value = _valueDict[val];
 
                                 cmd.ExecuteNonQuery();
                             }
@@ -429,7 +476,20 @@ namespace Metamorphosis
             {
                 conn.Open();
                 using (var transaction = conn.BeginTransaction())
+                using (var cmd = conn.CreateCommand())
                 {
+                    // Prepared once, reused per element - same reasoning as the EAV table,
+                    // and it also removes the hand-rolled quote escaping on the level name.
+                    cmd.CommandText = "INSERT INTO _objects_geom (id,BoundingBoxMin,BoundingBoxMax,Location,Location2,Level,Rotation) VALUES(?,?,?,?,?,?,?)";
+                    var idParam = cmd.Parameters.Add("id", DbType.Int64);
+                    var bbMinParam = cmd.Parameters.Add("BoundingBoxMin", DbType.String);
+                    var bbMaxParam = cmd.Parameters.Add("BoundingBoxMax", DbType.String);
+                    var locParam = cmd.Parameters.Add("Location", DbType.String);
+                    var loc2Param = cmd.Parameters.Add("Location2", DbType.String);
+                    var levelParam = cmd.Parameters.Add("Level", DbType.String);
+                    var rotationParam = cmd.Parameters.Add("Rotation", DbType.Single);
+                    cmd.Prepare();
+
                     foreach (Element e in elements)
                     {
                         BoundingBoxXYZ box = e.get_BoundingBox(null);
@@ -534,10 +594,21 @@ namespace Metamorphosis
                         string levName = String.Empty;
                         if (lev != null) levName = lev.Name;
 
-                            var cmd = conn.CreateCommand();
-                        cmd.CommandText = String.Format("INSERT INTO _objects_geom (id,BoundingBoxMin,BoundingBoxMax,Location,Location2,Level,Rotation) VALUES({0},'{1}','{2}','{3}','{4}','{5}',{6})", e.Id.AsLong(), bbMin, bbMax, lp, lp2, escapeQuote(levName), rotation.ToString(CultureInfo.InvariantCulture));
+                        idParam.Value = e.Id.AsLong();
+                        bbMinParam.Value = bbMin;
+                        bbMaxParam.Value = bbMax;
+                        locParam.Value = lp;
+                        loc2Param.Value = lp2;
+                        levelParam.Value = levName;
+                        rotationParam.Value = rotation;
 
-                        if (_logLevel == Utilities.Settings.LogLevel.Verbose) _doc.Application.WriteJournalComment(cmd.CommandText,false);
+                        if (_logLevel == Utilities.Settings.LogLevel.Verbose)
+                        {
+                            _doc.Application.WriteJournalComment(
+                                String.Format("_objects_geom id={0} bbMin='{1}' bbMax='{2}' loc='{3}' loc2='{4}' level='{5}' rot={6}",
+                                    e.Id.AsLong(), bbMin, bbMax, lp, lp2, levName,
+                                    rotation.ToString(CultureInfo.InvariantCulture)), false);
+                        }
 
                         cmd.ExecuteNonQuery();
                     }
@@ -577,21 +648,33 @@ namespace Metamorphosis
                 {
                     conn.Open();
                     using (var transaction = conn.BeginTransaction())
+                    using (var cmd = conn.CreateCommand())
                     {
+                        cmd.CommandText = "INSERT INTO _objects_links (instance_id,type_id,name,path,status,is_nested,doc_guid,num_saves) VALUES(?,?,?,?,?,?,?,?)";
+                        var instanceParam = cmd.Parameters.Add("instance_id", DbType.Int64);
+                        var typeParam = cmd.Parameters.Add("type_id", DbType.Int64);
+                        var nameParam = cmd.Parameters.Add("name", DbType.String);
+                        var pathParam = cmd.Parameters.Add("path", DbType.String);
+                        var statusParam = cmd.Parameters.Add("status", DbType.String);
+                        var nestedParam = cmd.Parameters.Add("is_nested", DbType.Int32);
+                        var guidParam = cmd.Parameters.Add("doc_guid", DbType.String);
+                        var savesParam = cmd.Parameters.Add("num_saves", DbType.Int32);
+                        currentQuery = cmd.CommandText;
+                        cmd.Prepare();
+
                         foreach (var link in links)
                         {
-                            var cmd = conn.CreateCommand();
-                            cmd.CommandText = String.Format(
-                                "INSERT INTO _objects_links (instance_id,type_id,name,path,status,is_nested,doc_guid,num_saves) VALUES({0},{1},'{2}','{3}','{4}',{5},{6},{7})",
-                                link.InstanceId,
-                                link.TypeId,
-                                escapeQuote(link.Name),
-                                escapeQuote(link.Path),
-                                escapeQuote(link.Status),
-                                link.IsNested ? 1 : 0,
-                                String.IsNullOrEmpty(link.DocumentGuid) ? "NULL" : "'" + escapeQuote(link.DocumentGuid) + "'",
-                                link.NumberOfSaves);
-                            currentQuery = cmd.CommandText;
+                            instanceParam.Value = link.InstanceId;
+                            typeParam.Value = link.TypeId;
+                            nameParam.Value = link.Name;
+                            pathParam.Value = link.Path;
+                            statusParam.Value = link.Status;
+                            nestedParam.Value = link.IsNested ? 1 : 0;
+                            // Null stays null: absence of a fingerprint means the link was
+                            // unloaded and its content could not be read, not that it matched.
+                            guidParam.Value = String.IsNullOrEmpty(link.DocumentGuid)
+                                ? (object)DBNull.Value : link.DocumentGuid;
+                            savesParam.Value = link.NumberOfSaves;
 
                             cmd.ExecuteNonQuery();
                         }
@@ -631,13 +714,9 @@ namespace Metamorphosis
 
             return lev;
         }
-        
-        private string escapeQuote(string input)
-        {
-            if (input == null) return String.Empty;
 
-            return input.Replace("'", "''");
-        }
+        // escapeQuote is gone: every value is bound as a parameter now, so quote doubling
+        // is no longer anyone's job.
 
 #endregion
     }
