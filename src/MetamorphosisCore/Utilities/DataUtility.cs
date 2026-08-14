@@ -13,40 +13,31 @@ namespace Metamorphosis.Utilities
     /// </summary>
     internal static class DataUtility
     {
-        internal static Version CurrentVersion = new Version(1, 1);
+        internal static Version CurrentVersion = new Version(1, 2);
 
         private static Assembly _CurrentAsm = System.Reflection.Assembly.GetExecutingAssembly();
-        private static Dictionary<Version, string> _UpgradeScripts = new Dictionary<Version, string>() { { new Version(1, 0), "Metamorphosis.DBScript.UpgradeToV1.txt" },
-            { new Version(1,1), "Metamorphosis.DBScript.UpgradeToV1.1.txt" } };
+        private static Dictionary<Version, string> _UpgradeScripts = new Dictionary<Version, string>() { { new Version(1, 0), "DBScript.UpgradeToV1.txt" },
+            { new Version(1,1), "DBScript.UpgradeToV1.1.txt" },
+            { new Version(1,2), "DBScript.UpgradeToV1.2.txt" } };
         
         internal static void UpgradeFrom(SQLiteConnection conn, Version v, Action<string> log)
         {
             var todo = _UpgradeScripts.Where(s => s.Key > v).OrderBy(s => s.Key).ToList();
             if (log != null) log("=> There are " + todo.Count + " upgrades to the database.");
 
-
-            bool fixNameSpace = false;
-            if (System.Reflection.Assembly.GetExecutingAssembly().GetName().Name != "Metamorphosis")
+            // The old code patched the resource prefix by hand here - if the assembly was
+            // not called "Metamorphosis" it rewrote the ids to say "MetamorphosisCore",
+            // which only ever worked for that one alternative name. Resource ids are now
+            // derived from the running assembly in ResourceNames, so any name works and
+            // there is nothing to patch.
+            foreach ( var script in todo )
             {
-                fixNameSpace = true;
-            }
+                if (log != null) log("   => Version: " + script.Key + " Update: " + script.Value);
 
-            foreach( var script in todo )
-            {
-                string val = script.Value;
-                if (fixNameSpace) val = val.Replace("Metamorphosis.", "MetamorphosisCore.");
-                if (log != null) log("   => Version: " + script.Key + " Update: " + val);
-
-                
-                if (System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceInfo(val) == null)
-                {
-                    if (log != null) log("ISSUE: Unable to find desired script: " + val);
-                    continue;
-                }
-                string[] statements = ReadSQLScript(val);
+                string[] statements = ReadSQLScript(script.Value);
                 if (statements == null)
                 {
-                    if (log != null) log("ISSUE: Unable to find desired script: " + val);
+                    if (log != null) log("ISSUE: Unable to find desired script: " + ResourceNames.Qualify(script.Value));
                     continue;
                 }
 
@@ -70,7 +61,9 @@ namespace Metamorphosis.Utilities
         {
             
         
-            Stream s = _CurrentAsm.GetManifestResourceStream(name);
+            // Callers pass a path relative to the project root; qualifying happens here
+            // and nowhere else, so the ids cannot drift apart again.
+            Stream s = _CurrentAsm.GetManifestResourceStream(ResourceNames.Qualify(name));
 
             if (s == null) return null;
             string sql = null;

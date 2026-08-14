@@ -1,0 +1,65 @@
+<Project>
+
+  <!--
+    One place that knows how Revit releases map to build settings.
+
+    Before this, each supported year was a hand-copied ~15-line <PropertyGroup> in the
+    csproj - 21 configurations per project, two projects - plus hardcoded references to
+    C:\Program Files\Autodesk\Revit 20XX\RevitAPI.dll, which meant a build machine had to
+    have that exact Revit installed at that exact path. Adding a year meant copying a
+    block and hoping every field got updated.
+
+    Now a build picks a year and everything follows from it:
+
+        dotnet build -p:RevitVersion=2024
+        dotnet build -p:RevitVersion=2026
+
+    Adding a new Revit release is a version number, not a new block of XML.
+  -->
+
+  <PropertyGroup>
+    <!-- Default matches the machine this is developed on. Override on the command line. -->
+    <RevitVersion Condition="'$(RevitVersion)' == ''">2024</RevitVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      Autodesk changed the add-in runtime twice, which is why this project used to be two
+      separate projects: .NET Framework through Revit 2024, .NET 8 for 2025-2026, and
+      .NET 10 from 2027. A pre-2025 add-in physically cannot load in 2025+.
+
+      The 2027 mapping is written but deliberately untested - it needs a .NET 10 SDK,
+      which no machine here has yet. Treat it as the shape, not as a supported target.
+    -->
+    <TargetFramework Condition="'$(RevitVersion)' &lt; '2025'">net48</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &gt;= '2025' And '$(RevitVersion)' &lt; '2027'">net8.0-windows</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' &gt;= '2027'">net10.0-windows</TargetFramework>
+
+    <!-- ElementId became 64-bit in 2024; the source branches on this. -->
+    <LongElementIds Condition="'$(RevitVersion)' &gt;= '2024'">true</LongElementIds>
+
+    <DefineConstants>$(DefineConstants);REVIT$(RevitVersion)</DefineConstants>
+    <DefineConstants Condition="'$(LongElementIds)' == 'true'">$(DefineConstants);LONGELEMENTIDS</DefineConstants>
+
+    <LangVersion>latest</LangVersion>
+    <Platforms>AnyCPU</Platforms>
+    <!--
+      CA1416 warns that WinForms/WPF calls are Windows-only. Revit is Windows-only, so
+      every one of those 566 warnings is true and useless - and they buried the dozen
+      real ones (CS8073/CS0472: null checks against non-nullable value types that are
+      always true, and SYSLIB0014 obsolete WebRequest use). Silencing the noise is what
+      makes the signal visible.
+    -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <PlatformTarget>x64</PlatformTarget>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\bin\$(Configuration)$(RevitVersion)\</OutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- The Revit API is not redistributable, so these packages are reference-only and
+         must never be copied to the output; Revit supplies them at run time. -->
+    <RevitApiPackageVersion>$(RevitVersion).*</RevitApiPackageVersion>
+  </PropertyGroup>
+
+</Project>

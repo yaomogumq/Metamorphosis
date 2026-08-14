@@ -298,7 +298,7 @@ namespace Metamorphosis.UI
             Autodesk.Revit.DB.Color overrideColor = new Autodesk.Revit.DB.Color(0, 0, 0);
 
             // group changes by type...
-            var grouped =  _changes.GroupBy(c => c.ChangeType).ToDictionary(c => c.Key, c => c.ToList());
+            var grouped = groupByChangeType(_changes);
 
             var list = grouped.Keys.ToList();
             if (list.Contains( Objects.Change.ChangeTypeEnum.DeletedElement)) list.Remove(Objects.Change.ChangeTypeEnum.DeletedElement);
@@ -493,9 +493,9 @@ namespace Metamorphosis.UI
             TreeNode root = new TreeNode("Changes: " + _changes.Count);
             treeView1.Nodes.Add(root);
 
-            foreach (var group in _changes.GroupBy(c => c.ChangeType).ToDictionary(c => c.Key, c => c.ToList()))
+            foreach (var group in groupByChangeType(_changes))
             {
-               
+
                 TreeNode catNode = new TreeNode(group.Key.ToString());
                 catNode.Text = catNode.Text + "(" + group.Value.Count + ")";
                 root.Nodes.Add(catNode);
@@ -518,9 +518,21 @@ namespace Metamorphosis.UI
             root.Expand();
         }
 
+        /// <summary>
+        /// Group the changes by type, listing each change under every type it carries. A
+        /// compound edit - moved AND re-parametered - appears under both, so colouring or
+        /// browsing by one type never hides the other.
+        /// </summary>
+        private Dictionary<Objects.Change.ChangeTypeEnum, List<Objects.Change>> groupByChangeType(IEnumerable<Objects.Change> changes)
+        {
+            return changes.SelectMany(c => c.ChangeTypes.Select(t => new { Type = t, Change = c }))
+                          .GroupBy(pair => pair.Type)
+                          .ToDictionary(g => g.Key, g => g.Select(pair => pair.Change).ToList());
+        }
+
         private TreeNode buildItemNode(Objects.Change item)
         {
-            TreeNode itemNode = new TreeNode(item.Category + (item.IsType ? "Type":"") + ": " + item.ElementId + ": " + item.ChangeType);
+            TreeNode itemNode = new TreeNode(item.Category + (item.IsType ? "Type":"") + ": " + item.ElementId + ": " + item.ChangeTypeDescription);
             itemNode.ToolTipText = item.ChangeDescription;
             itemNode.Tag = item;
             
@@ -539,23 +551,25 @@ namespace Metamorphosis.UI
                 {
                     _selectedItems = new Objects.Change[] { item };
 
-                    switch (item.ChangeType)
+                    // A change can carry several types at once, so ask what it contains rather
+                    // than switching on the primary one - otherwise a move that came alongside
+                    // a parameter edit would never offer the move arrows. Same priority order
+                    // as the switch this replaced.
+                    if (item.HasChangeType(Objects.Change.ChangeTypeEnum.Move))
                     {
-                        case Objects.Change.ChangeTypeEnum.Move:
-                            _action = ActionEnum.ShowMove;
-                            break;
-
-                        case Objects.Change.ChangeTypeEnum.Rotate:
-                            _action = ActionEnum.ShowRotation;
-                            break;
-
-                        case Objects.Change.ChangeTypeEnum.DeletedElement:
-                            _action = ActionEnum.ShowSolid;
-                            break;
-
-                        default:
-                            _action = (_isLinkDoc ? ActionEnum.ShowSolid : ActionEnum.ShowElement);
-                            break;
+                        _action = ActionEnum.ShowMove;
+                    }
+                    else if (item.HasChangeType(Objects.Change.ChangeTypeEnum.Rotate))
+                    {
+                        _action = ActionEnum.ShowRotation;
+                    }
+                    else if (item.HasChangeType(Objects.Change.ChangeTypeEnum.DeletedElement))
+                    {
+                        _action = ActionEnum.ShowSolid;
+                    }
+                    else
+                    {
+                        _action = (_isLinkDoc ? ActionEnum.ShowSolid : ActionEnum.ShowElement);
                     }
                 }               
                 
@@ -630,7 +644,7 @@ namespace Metamorphosis.UI
             List<Objects.VectorObject> vectors = new List<Objects.VectorObject>();
             foreach (var item in items)
             {
-                if (item.ChangeType != Objects.Change.ChangeTypeEnum.Move) continue;
+                if (item.HasChangeType(Objects.Change.ChangeTypeEnum.Move) == false) continue;
 
                 if (String.IsNullOrEmpty(item.MoveDescription) == false)
                 {
@@ -659,7 +673,7 @@ namespace Metamorphosis.UI
             List<Objects.VectorObject> vectors = new List<Objects.VectorObject>();
             foreach (var item in items)
             {
-                if (item.ChangeType != Objects.Change.ChangeTypeEnum.Rotate) continue;
+                if (item.HasChangeType(Objects.Change.ChangeTypeEnum.Rotate) == false) continue;
 
                 if (String.IsNullOrEmpty(item.RotationDescription) == false)
                 {

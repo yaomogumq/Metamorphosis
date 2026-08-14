@@ -25,6 +25,8 @@ namespace Metamorphosis
         private IList<Level> _allLevels;
         private bool _isMetric = false;
         private bool _useGuidCompare = false;
+        private IList<LinkState> _previousLinks = new List<LinkState>();
+        private HashSet<string> _suspectCategories = new HashSet<string>();
 
 
 
@@ -41,6 +43,14 @@ namespace Metamorphosis
         public double MoveTolerance { get; set; }
         public float RotateTolerance { get; set; }
         public bool UseEpisodeGuid { get; set; }
+
+        /// <summary>
+        /// Differences in the linked models between the two snapshots. Populated by
+        /// <see cref="Compare"/>. These are not model changes - they are reasons some of
+        /// the reported changes may not be real, so read them before trusting a room's
+        /// area or volume delta.
+        /// </summary>
+        public IList<LinkWarning> LinkWarnings { get; private set; } = new List<LinkWarning>();
         #endregion
 
         #region Constructor
@@ -78,9 +88,14 @@ namespace Metamorphosis
                 _doc.Application.WriteJournalComment("Falling back to traditional/EpisodeGuid not available!", false);
                 UseEpisodeGuid = false;
             }
+            // Work out how the linked models differ before looking at elements, so the
+            // element changes can be labelled with what we learn here.
+            buildLinkWarnings();
+
+            IList<Change> changes;
             if (UseEpisodeGuid)
             {
-                return compareWithEpisodeGuid();
+                changes = compareWithEpisodeGuid();
             }
             else
             {
@@ -88,10 +103,12 @@ namespace Metamorphosis
                 readModel();
 
                 // make our comparisons
-                return compareData();
+                changes = compareData();
             }
 
+            flagSuspectChanges(changes);
 
+            return changes;
         }
 
         public void Serialize(string filename, IList<Change> changes)
@@ -120,6 +137,7 @@ namespace Metamorphosis
             summary.Changes = changes;
             summary.ModelSummary = _categoryCount;
             summary.LevelNames = _allLevels.OrderBy(a => a.Elevation).Select(a => a.Name).ToList();
+            summary.LinkWarnings = LinkWarnings;
 
 
             string result = Newtonsoft.Json.JsonConvert.SerializeObject(summary);
@@ -301,22 +319,19 @@ namespace Metamorphosis
         }
         private Change compareElements(RevitElement current, RevitElement previous)
         {
-            // compare the parameter values
-
-            
-
+            // Both comparisons always run. An element can be moved and re-parametered in the
+            // same revision, and a quantity take-off needs to see both - reporting only the
+            // parameter change because it was tested first hides the geometric one.
             // at present, we can only compare string values
-            Change c = compareParameters(current, previous);
+            Change parameterChange = compareParameters(current, previous);
+            Change geometryChange = compareGeometry(current, previous);
 
-            if (c != null)
-            {              
-                return c;
-            }
+            if (parameterChange == null) return geometryChange;
+            if (geometryChange == null) return parameterChange;
 
-            c = compareGeometry(current, previous);
+            parameterChange.MergeFrom(geometryChange);
 
-            return c;
-
+            return parameterChange;
         }
 
         private Change buildNew(RevitElement current)
@@ -417,82 +432,50 @@ namespace Metamorphosis
 
            //old, fixed: double tolerance = 0.0006;  // decimal feet - 1/128"?
 
+            // Every axis below is tested, and they accumulate into one change record. An
+            // element that was both moved and rotated has changed in two ways and a take-off
+            // needs both of them, not just the first one we happened to look for.
+            Change c = null;
             double dist = -1;
+            double dist2 = -1;
 
-            if (didMove(current.LocationPoint, previous.LocationPoint, MoveTolerance, out dist))
+            bool movedPrimary = didMove(current.LocationPoint, previous.LocationPoint, MoveTolerance, out dist);
+            bool movedSecondary = (current.LocationPoint2 != null) && (previous.LocationPoint2 != null) &&
+                                   didMove(previous.LocationPoint2, current.LocationPoint2, MoveTolerance, out dist2);
+
+            if (movedPrimary || movedSecondary)
             {
+                c = addGeometryChange(c, current, Change.ChangeTypeEnum.Move,
+                                      "Location Offset " + getHumanComparison(movedPrimary ? dist : dist2));
 
-                Change c = new Change()
+                if (movedPrimary && movedSecondary)
                 {
-                    ChangeType = Change.ChangeTypeEnum.Move,
-                    Category = current.Category,
-                    ElementId = current.ElementId,
-                    UniqueId = current.UniqueId,
-                    ChangeDescription = "Location Offset " + getHumanComparison(dist)
-                };
-                if (current.BoundingBox != null) c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
-
-                // we want to check if the LocationPoint2 also moved?
-                if ((current.LocationPoint2 != null) && (previous.LocationPoint2 != null) &&
-                    (didMove(current.LocationPoint2, previous.LocationPoint2, MoveTolerance, out dist)))
-                {
-
                     // both moved. record both.
                     c.MoveDescription = Utilities.RevitUtils.SerializeDoubleMove(previous.LocationPoint, current.LocationPoint,
                                                                                   previous.LocationPoint2, current.LocationPoint2);
-
                 }
-                else
+                else if (movedPrimary)
                 {
                     // single move.
                     c.MoveDescription = Utilities.RevitUtils.SerializeMove(previous.LocationPoint, current.LocationPoint);
                 }
-
-                return c;
-
-            }
-
-            // only a move of the second one...
-            if ((current.LocationPoint2 != null) && (previous.LocationPoint2 != null) && 
-                    didMove(previous.LocationPoint2, current.LocationPoint2, MoveTolerance, out dist))
-            {
-                
-                    Change c = new Change()
-                    {
-                        ChangeType = Change.ChangeTypeEnum.Move,
-                        Category = current.Category,
-                        ElementId = current.ElementId,
-                        UniqueId = current.UniqueId,
-                        ChangeDescription = "Location Offset " + getHumanComparison(dist),
-                        Level = current.Level
-                    };
-                    if (current.BoundingBox != null) c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
-
-                // only one side moved though...
-                c.MoveDescription = Utilities.RevitUtils.SerializeMove(previous.LocationPoint2, current.LocationPoint2);
-                    return c;
-                
+                else
+                {
+                    // only one side moved though...
+                    c.MoveDescription = Utilities.RevitUtils.SerializeMove(previous.LocationPoint2, current.LocationPoint2);
+                }
             }
 
             // check rotation
             // old, fixed: float rotationTolerance = 0.0349f; // two degrees?
             float rotationDiff = current.Rotation - previous.Rotation;
-            
+
             if (Math.Abs(rotationDiff) > RotateTolerance)
             {
-                Change c = new Change()
-                {
-                    ChangeType = Change.ChangeTypeEnum.Rotate,
-                    Category = current.Category,
-                    ElementId = current.ElementId,
-                    UniqueId = current.UniqueId,
-                    ChangeDescription = "Rotation: " + ((rotationDiff) * 180.0 / Math.PI).ToString("F2") + " degrees",
-                    Level = current.Level
-                };
-                if (current.BoundingBox != null) c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
-                c.RotationDescription = Utilities.RevitUtils.SerializeRotation(current.LocationPoint, XYZ.BasisZ, rotationDiff);
+                c = addGeometryChange(c, current, Change.ChangeTypeEnum.Rotate,
+                                      "Rotation: " + ((rotationDiff) * 180.0 / Math.PI).ToString("F2") + " degrees");
 
-                return c;
+                c.RotationDescription = Utilities.RevitUtils.SerializeRotation(current.LocationPoint, XYZ.BasisZ, rotationDiff);
             }
 
             // now the bounding box...
@@ -501,23 +484,76 @@ namespace Metamorphosis
                 double maxDist = Math.Max(current.BoundingBox.Min.DistanceTo(previous.BoundingBox.Min),
                                            current.BoundingBox.Max.DistanceTo(previous.BoundingBox.Max));
 
-                if (maxDist > MoveTolerance)
+                double sizeDelta = -1;
+                bool resized = didResize(current.BoundingBox, previous.BoundingBox, MoveTolerance, out sizeDelta);
+
+                // Rotating an element changes the extents of its axis-aligned bounding box
+                // without the element itself changing size, and the box alone cannot tell the
+                // two apart - so once a rotation is reported, a size difference proves nothing.
+                bool rotated = (c != null) && c.HasChangeType(Change.ChangeTypeEnum.Rotate);
+
+                // A box that only shifted is just a restatement of the move or rotation already
+                // reported above, so it stays suppressed as noise - that part of the original
+                // behaviour is deliberate. A box whose SIZE changed is a different fact: the
+                // element itself got bigger or smaller, which changes quantities, so it is
+                // always reported whether or not the element also moved.
+                if (resized && (rotated == false))
                 {
-                    Change c = new Change()
-                    {
-                        ChangeType = Change.ChangeTypeEnum.GeometryChange,
-                        Category = current.Category,
-                        ElementId = current.ElementId,
-                        UniqueId = current.UniqueId,
-                        ChangeDescription = "BoundingBox Offset " + getHumanComparison(maxDist),
-                    };
-                    c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
-                    return c;
+                    c = addGeometryChange(c, current, Change.ChangeTypeEnum.GeometryChange,
+                                          "BoundingBox Size Change " + getHumanComparison(sizeDelta));
+                }
+                else if ((c == null) && (maxDist > MoveTolerance))
+                {
+                    c = addGeometryChange(c, current, Change.ChangeTypeEnum.GeometryChange,
+                                          "BoundingBox Offset " + getHumanComparison(maxDist));
                 }
             }
 
-            return null;
+            return c;
 
+        }
+
+        /// <summary>
+        /// Start a geometric change record, or fold another change type into the one already
+        /// started for this element, so that a compound geometric edit stays a single record.
+        /// </summary>
+        private Change addGeometryChange(Change existing, RevitElement current, Change.ChangeTypeEnum type, string description)
+        {
+            if (existing != null)
+            {
+                existing.AddChangeType(type);
+                existing.ChangeDescription = existing.ChangeDescription + "; " + description;
+                return existing;
+            }
+
+            Change c = new Change()
+            {
+                ChangeType = type,
+                Category = current.Category,
+                ElementId = current.ElementId,
+                UniqueId = current.UniqueId,
+                ChangeDescription = description,
+                Level = current.Level
+            };
+            if (current.BoundingBox != null) c.BoundingBoxDescription = Utilities.RevitUtils.SerializeBoundingBox(current.BoundingBox);
+
+            return c;
+        }
+
+        /// <summary>
+        /// Did the element's bounding box change size, as opposed to just moving? Size is what
+        /// a quantity take-off cares about, and it survives the element also having been moved.
+        /// </summary>
+        private bool didResize(BoundingBoxXYZ current, BoundingBoxXYZ previous, double tolerance, out double delta)
+        {
+            XYZ currentSize = current.Max - current.Min;
+            XYZ previousSize = previous.Max - previous.Min;
+
+            delta = Math.Max(Math.Abs(currentSize.X - previousSize.X),
+                    Math.Max(Math.Abs(currentSize.Y - previousSize.Y),
+                             Math.Abs(currentSize.Z - previousSize.Z)));
+
+            return delta > tolerance;
         }
 
         private bool didMove(XYZ oldPoint, XYZ newPoint, double tolerance, out double distance)
@@ -626,6 +662,277 @@ namespace Metamorphosis
             readValues();
             readElements();
             readGeometry();
+            readLinks();
+        }
+
+        /// <summary>
+        /// Read the link manifest recorded when the previous snapshot was taken. Snapshots
+        /// written before schema 1.2 have no manifest; readHeader has already run the
+        /// upgrade scripts by this point, so the table exists but is empty, and an empty
+        /// manifest simply means nothing can be said about links.
+        /// </summary>
+        private void readLinks()
+        {
+            _previousLinks = new List<LinkState>();
+
+            try
+            {
+                using (SQLiteConnection conn = new SQLiteConnection("Data Source=" + _dbFilename + ";Version=3;"))
+                {
+                    conn.Open();
+
+                    var check = conn.CreateCommand();
+                    check.CommandText = "select name from sqlite_master WHERE type='table' and name='_objects_links'";
+                    if (check.ExecuteScalar() == null)
+                    {
+                        _doc.Application.WriteJournalComment("Previous snapshot has no link manifest (pre-1.2 schema).", false);
+                        return;
+                    }
+
+                    var cmd = conn.CreateCommand();
+                    cmd.CommandText = "select instance_id,type_id,name,path,status,is_nested,doc_guid,num_saves from _objects_links";
+                    using (SQLiteDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            _previousLinks.Add(new LinkState()
+                            {
+                                InstanceId = reader.IsDBNull(0) ? 0 : reader.GetInt64(0),
+                                TypeId = reader.IsDBNull(1) ? 0 : reader.GetInt64(1),
+                                Name = readString(reader, 2),
+                                Path = readString(reader, 3),
+                                Status = readString(reader, 4),
+                                IsNested = !reader.IsDBNull(5) && reader.GetInt32(5) == 1,
+                                DocumentGuid = reader.IsDBNull(6) ? null : readString(reader, 6),
+                                NumberOfSaves = reader.IsDBNull(7) ? -1 : reader.GetInt32(7)
+                            });
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Never fail a comparison because the manifest could not be read - the
+                // element diff is still worth having.
+                _doc.Application.WriteJournalComment("Could not read link manifest: " + ex.GetType().Name + ": " + ex.Message, false);
+                _previousLinks = new List<LinkState>();
+            }
+
+            _doc.Application.WriteJournalComment("Previous snapshot recorded " + _previousLinks.Count + " link(s).", false);
+        }
+
+        /// <summary>Text columns come back as byte[] rather than TEXT in these snapshots.</summary>
+        private string readString(SQLiteDataReader reader, int column)
+        {
+            if (reader.IsDBNull(column)) return String.Empty;
+
+            object o = reader.GetValue(column);
+            byte[] bytes = o as byte[];
+            if (bytes != null) return Encoding.UTF8.GetString(bytes);
+
+            return o.ToString();
+        }
+
+        /// <summary>
+        /// Compare the recorded links against those loaded right now, and work out which
+        /// differences can make unrelated elements look changed.
+        ///
+        /// The decisive distinction is between a link whose CONTENT changed and one whose
+        /// mere PRESENCE changed. The first makes downstream room changes real; the second
+        /// makes them an artefact of what happened to be loaded at export time. A content
+        /// fingerprint only exists for a loaded link, so when either side was unloaded the
+        /// honest answer is that we cannot tell - which is treated as suspect, not as clean.
+        /// </summary>
+        private void buildLinkWarnings()
+        {
+            LinkWarnings = new List<LinkWarning>();
+            _suspectCategories = new HashSet<string>();
+
+            IList<LinkState> currentLinks;
+            try
+            {
+                currentLinks = Utilities.RevitUtils.CollectLinkStates(_doc);
+            }
+            catch (Exception ex)
+            {
+                _doc.Application.WriteJournalComment("Could not collect current link states: " + ex.Message, false);
+                return;
+            }
+
+            if ((_previousLinks.Count == 0) && (currentLinks.Count == 0)) return;
+
+            if (_previousLinks.Count == 0)
+            {
+                // Nothing recorded to compare against - say so rather than implying the
+                // links were verified and found identical.
+                LinkWarnings.Add(new LinkWarning()
+                {
+                    Issue = LinkWarning.LinkIssueEnum.ContentUnknown,
+                    LinkName = "(all links)",
+                    CausesSuspectChanges = currentLinks.Count > 0,
+                    Description = "The previous snapshot recorded no link manifest, so link state could not be " +
+                                  "compared. " + currentLinks.Count + " link(s) are loaded now; any room or space " +
+                                  "change below may reflect a link difference rather than a design change."
+                });
+                if (currentLinks.Count > 0) markSpatialCategoriesSuspect();
+                return;
+            }
+
+            Dictionary<string, LinkState> previousByKey = new Dictionary<string, LinkState>();
+            foreach (var link in _previousLinks)
+            {
+                previousByKey[link.Key] = link;
+            }
+
+            bool anySuspect = false;
+
+            foreach (var current in currentLinks)
+            {
+                LinkState previous = null;
+                if (previousByKey.TryGetValue(current.Key, out previous))
+                {
+                    previousByKey.Remove(current.Key);
+
+                    // A link absent from both snapshots bounded nothing either time, so no
+                    // difference in it can explain a change. Saying nothing is the correct
+                    // report - warning here would fire on every comparison and train the
+                    // reader to ignore the warnings that do matter.
+                    if (!current.ContributesGeometry && !previous.ContributesGeometry) continue;
+
+                    bool statusChanged = !String.Equals(previous.Status, current.Status, StringComparison.OrdinalIgnoreCase);
+                    bool? contentChanged = current.ContentChangedFrom(previous);
+
+                    if (contentChanged == true)
+                    {
+                        LinkWarnings.Add(new LinkWarning()
+                        {
+                            Issue = LinkWarning.LinkIssueEnum.ContentChanged,
+                            LinkName = current.Name,
+                            Path = current.Path,
+                            PreviousStatus = previous.Status,
+                            CurrentStatus = current.Status,
+                            CausesSuspectChanges = false,
+                            Description = "The linked file was revised between the two snapshots. Changes to " +
+                                          "elements bounded by it are real."
+                        });
+                    }
+                    else if (statusChanged)
+                    {
+                        anySuspect = true;
+                        LinkWarnings.Add(new LinkWarning()
+                        {
+                            Issue = LinkWarning.LinkIssueEnum.LoadStateChanged,
+                            LinkName = current.Name,
+                            Path = current.Path,
+                            PreviousStatus = previous.Status,
+                            CurrentStatus = current.Status,
+                            CausesSuspectChanges = true,
+                            Description = "The link went from " + previous.Status + " to " + current.Status +
+                                          (contentChanged == false
+                                              ? " with no change to its content."
+                                              : ", and its content could not be compared because it was unloaded on at least one side.") +
+                                          " Room and space changes driven by this link are probably artefacts of what was loaded, not design changes."
+                        });
+                    }
+                    else if (contentChanged == null)
+                    {
+                        anySuspect = true;
+                        LinkWarnings.Add(new LinkWarning()
+                        {
+                            Issue = LinkWarning.LinkIssueEnum.ContentUnknown,
+                            LinkName = current.Name,
+                            Path = current.Path,
+                            PreviousStatus = previous.Status,
+                            CurrentStatus = current.Status,
+                            CausesSuspectChanges = true,
+                            Description = "The link was " + current.Status + " on both sides, so its content could " +
+                                          "not be fingerprinted and a revision cannot be ruled out."
+                        });
+                    }
+                }
+                else
+                {
+                    // Only a link that actually contributes geometry can explain a change;
+                    // one added but left unloaded is worth noting, not worth distrusting.
+                    bool suspect = current.ContributesGeometry;
+                    anySuspect = anySuspect || suspect;
+                    LinkWarnings.Add(new LinkWarning()
+                    {
+                        Issue = LinkWarning.LinkIssueEnum.LinkAdded,
+                        LinkName = current.Name,
+                        Path = current.Path,
+                        CurrentStatus = current.Status,
+                        CausesSuspectChanges = suspect,
+                        Description = "This link is present now but was not recorded in the previous snapshot." +
+                                      (suspect
+                                          ? " It is contributing geometry, so rooms bounded by it may appear to have changed."
+                                          : " It is not loaded, so it does not affect any measurement.")
+                    });
+                }
+            }
+
+            // Whatever is left was in the previous snapshot and is gone now.
+            foreach (var removed in previousByKey.Values)
+            {
+                bool suspect = removed.ContributesGeometry;
+                anySuspect = anySuspect || suspect;
+                LinkWarnings.Add(new LinkWarning()
+                {
+                    Issue = LinkWarning.LinkIssueEnum.LinkRemoved,
+                    LinkName = removed.Name,
+                    Path = removed.Path,
+                    PreviousStatus = removed.Status,
+                    CausesSuspectChanges = suspect,
+                    Description = "This link was recorded in the previous snapshot and is no longer present." +
+                                  (suspect
+                                      ? " It was contributing geometry, so rooms that relied on it may appear to have changed."
+                                      : " It was not loaded then either, so it affected no measurement.")
+                });
+            }
+
+            if (anySuspect) markSpatialCategoriesSuspect();
+
+            if (LinkWarnings.Count > 0)
+            {
+                _doc.Application.WriteJournalComment("Link manifest differences: " + LinkWarnings.Count, false);
+            }
+        }
+
+        /// <summary>
+        /// Categories whose geometry is computed from whatever bounds them, and so are the
+        /// ones a link change can silently distort.
+        /// </summary>
+        private void markSpatialCategoriesSuspect()
+        {
+            _suspectCategories.Add("Rooms");
+            _suspectCategories.Add("Spaces");
+            _suspectCategories.Add("Areas");
+        }
+
+        /// <summary>
+        /// Flag changes that a link difference could have caused. The change is still
+        /// reported in full - it is labelled, not hidden, because a real edit to a room
+        /// during the same period would otherwise be discarded along with the noise.
+        /// </summary>
+        private void flagSuspectChanges(IList<Change> changes)
+        {
+            if (_suspectCategories.Count == 0) return;
+
+            int flagged = 0;
+            foreach (var change in changes)
+            {
+                if (change.Category == null) continue;
+                if (_suspectCategories.Contains(change.Category) == false) continue;
+
+                change.PossibleLinkArtifact = true;
+                flagged++;
+            }
+
+            if (flagged > 0)
+            {
+                _doc.Application.WriteJournalComment(
+                    "Flagged " + flagged + " room/space change(s) as possible link artefacts.", false);
+            }
         }
 
         private void readHeader()
