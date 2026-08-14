@@ -19,7 +19,11 @@
     <OutputType>Library</OutputType>
     <AssemblyName>Metamorphosis</AssemblyName>
     <RootNamespace>Metamorphosis</RootNamespace>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- Generated from the properties below. The hand-written Properties/AssemblyInfo.cs
+         is gone; leaving this false while deleting that file emitted no version at all,
+         and snapshots record Assembly.GetName().Version as ExportVersion. -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <ComVisible>false</ComVisible>
     <!-- WinForms for the dialogs, WPF because the ribbon buttons want ImageSource. -->
     <UseWindowsForms>true</UseWindowsForms>
     <UseWPF>true</UseWPF>
@@ -30,8 +34,15 @@
     <Copyright>MNM, KM, CP, TH Copyright ©  2016-2026</Copyright>
     <AssemblyVersion>3.2.0.0</AssemblyVersion>
     <FileVersion>3.2.0.0</FileVersion>
+    <Version>3.2.0</Version>
     <Configurations>Debug;Release</Configurations>
   </PropertyGroup>
+
+  <!-- Carried over from the deleted AssemblyInfo.cs: the Dynamo project reaches into
+       this assembly's internals, so dropping this would have broken its build. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="MetamorphosisDynamo" />
+  </ItemGroup>
 
   <!--
     Revit API assemblies come from NuGet rather than from an install path. The old
