@@ -75,12 +75,11 @@ namespace Metamorphosis
         {
             var panel = app.CreateRibbonPanel(Tab.AddIns, "Metamorphosis" + Environment.NewLine + "Divergence");
 
-            string prefix = System.Reflection.Assembly.GetExecutingAssembly().GetName().Name;
             var snapshot = new PushButtonData("Snapshot", "Snapshot", System.Reflection.Assembly.GetExecutingAssembly().Location, "Metamorphosis.Snapshot");
             snapshot.ToolTip = "Take a snapshot of a model";
             snapshot.LongDescription = "Take a snapshot of a model that can be used for later comparison of this version of the model.";
-            snapshot.LargeImage = getImage($"{prefix}.Images.Export-32.png");
-            snapshot.Image = getImage($"{prefix}.Images.Export-16.png");
+            snapshot.LargeImage = getImage(Utilities.ResourceNames.Qualify("Images.Export-32.png"));
+            snapshot.Image = getImage(Utilities.ResourceNames.Qualify("Images.Export-16.png"));
 
 
             panel.AddItem(snapshot);
@@ -88,15 +87,15 @@ namespace Metamorphosis
             var comp = new PushButtonData("Compare", "Compare", System.Reflection.Assembly.GetExecutingAssembly().Location, "Metamorphosis.Compare");
             comp.ToolTip = "Compare a model against a previous model";
             comp.LongDescription = "Compare a model against a previous snapshot of the model.";
-            comp.Image = getImage($"{prefix}.Images.Compare-16.png");
-            comp.LargeImage = getImage($"{prefix}.Images.Compare-32.png");
+            comp.Image = getImage(Utilities.ResourceNames.Qualify("Images.Compare-16.png"));
+            comp.LargeImage = getImage(Utilities.ResourceNames.Qualify("Images.Compare-32.png"));
             panel.AddItem(comp);
 
             var prev = new PushButtonData("Previous", "Previous", System.Reflection.Assembly.GetExecutingAssembly().Location, "Metamorphosis.PreviousResults");
             prev.ToolTip = "Load a previous comparison from the saved file.";
             prev.LongDescription = "Load a previous comparison from a saved results file.";
-            prev.Image = getImage($"{prefix}.Images.File-16.png");
-            prev.LargeImage = getImage($"{prefix}.Images.File-32.png");
+            prev.Image = getImage(Utilities.ResourceNames.Qualify("Images.File-16.png"));
+            prev.LargeImage = getImage(Utilities.ResourceNames.Qualify("Images.File-32.png"));
             panel.AddItem(prev);
 
             // anything below here on the slideout?
@@ -104,8 +103,8 @@ namespace Metamorphosis
             var clear = new PushButtonData("ClearAVF", "Clear", System.Reflection.Assembly.GetExecutingAssembly().Location, "Metamorphosis.Commands.ClearAVF");
             clear.ToolTip = "Clear any AVF graphics from the current view.";
             clear.LongDescription = "Clear any Analysis Visualization Framework graphic primitives (faces, boxes, vectors) from the active view.";
-            clear.Image = getImage($"{prefix}.Images.clear-16.png");
-            clear.LargeImage = getImage($"{prefix}.Images.clear-32.png");
+            clear.Image = getImage(Utilities.ResourceNames.Qualify("Images.clear-16.png"));
+            clear.LargeImage = getImage(Utilities.ResourceNames.Qualify("Images.clear-32.png"));
             panel.AddItem(clear);
 
         }

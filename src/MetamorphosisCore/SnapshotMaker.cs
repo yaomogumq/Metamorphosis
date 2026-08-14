@@ -75,11 +75,15 @@ namespace Metamorphosis
             using (SQLiteConnection conn = new SQLiteConnection("Data Source=" + _dbFilename + ";Version=3;"))
             {
                 conn.Open();
-                string prefix = System.Reflection.Assembly.GetExecutingAssembly().GetName().Name;
-
-
                 // create the table structure from the sql instructions.
-                string[] lines = Utilities.DataUtility.ReadSQLScript($"{prefix}.databaseFormat.txt");
+                string[] lines = Utilities.DataUtility.ReadSQLScript("databaseFormat.txt");
+                if (lines == null)
+                {
+                    throw new InvalidOperationException(
+                        "Embedded resource 'databaseFormat.txt' is missing from assembly '" +
+                        System.Reflection.Assembly.GetExecutingAssembly().GetName().Name +
+                        "'. Without it no tables can be created.");
+                }
 
                 foreach (string sql in lines)
                 {
