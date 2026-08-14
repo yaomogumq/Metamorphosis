@@ -74,6 +74,27 @@ namespace Metamorphosis.Objects
         {
             get { return (String.IsNullOrEmpty(Path) ? Name : Path).ToUpperInvariant(); }
         }
+
+        /// <summary>
+        /// Was this link actually contributing geometry to the host at the time?
+        ///
+        /// This is what decides whether a difference matters. A link that was unloaded in
+        /// both snapshots bounded nothing on either side, so it cannot have moved a room's
+        /// area no matter what happened to the file on disk - warning about it would be
+        /// crying wolf on every comparison. Only links that were present somewhere can
+        /// explain a change.
+        /// </summary>
+        [JsonIgnore]
+        public bool ContributesGeometry
+        {
+            get
+            {
+                if (HasFingerprint) return true;   // only a loaded document yields one
+
+                return String.Equals(Status, "Loaded", StringComparison.OrdinalIgnoreCase)
+                    || String.Equals(Status, "Imported", StringComparison.OrdinalIgnoreCase);
+            }
+        }
         #endregion
 
         #region PublicMethods

@@ -793,6 +793,12 @@ namespace Metamorphosis
                 {
                     previousByKey.Remove(current.Key);
 
+                    // A link absent from both snapshots bounded nothing either time, so no
+                    // difference in it can explain a change. Saying nothing is the correct
+                    // report - warning here would fire on every comparison and train the
+                    // reader to ignore the warnings that do matter.
+                    if (!current.ContributesGeometry && !previous.ContributesGeometry) continue;
+
                     bool statusChanged = !String.Equals(previous.Status, current.Status, StringComparison.OrdinalIgnoreCase);
                     bool? contentChanged = current.ContentChangedFrom(previous);
 
@@ -846,15 +852,21 @@ namespace Metamorphosis
                 }
                 else
                 {
-                    anySuspect = true;
+                    // Only a link that actually contributes geometry can explain a change;
+                    // one added but left unloaded is worth noting, not worth distrusting.
+                    bool suspect = current.ContributesGeometry;
+                    anySuspect = anySuspect || suspect;
                     LinkWarnings.Add(new LinkWarning()
                     {
                         Issue = LinkWarning.LinkIssueEnum.LinkAdded,
                         LinkName = current.Name,
                         Path = current.Path,
                         CurrentStatus = current.Status,
-                        CausesSuspectChanges = true,
-                        Description = "This link is present now but was not recorded in the previous snapshot."
+                        CausesSuspectChanges = suspect,
+                        Description = "This link is present now but was not recorded in the previous snapshot." +
+                                      (suspect
+                                          ? " It is contributing geometry, so rooms bounded by it may appear to have changed."
+                                          : " It is not loaded, so it does not affect any measurement.")
                     });
                 }
             }
@@ -862,15 +874,19 @@ namespace Metamorphosis
             // Whatever is left was in the previous snapshot and is gone now.
             foreach (var removed in previousByKey.Values)
             {
-                anySuspect = true;
+                bool suspect = removed.ContributesGeometry;
+                anySuspect = anySuspect || suspect;
                 LinkWarnings.Add(new LinkWarning()
                 {
                     Issue = LinkWarning.LinkIssueEnum.LinkRemoved,
                     LinkName = removed.Name,
                     Path = removed.Path,
                     PreviousStatus = removed.Status,
-                    CausesSuspectChanges = true,
-                    Description = "This link was recorded in the previous snapshot and is no longer present."
+                    CausesSuspectChanges = suspect,
+                    Description = "This link was recorded in the previous snapshot and is no longer present." +
+                                  (suspect
+                                      ? " It was contributing geometry, so rooms that relied on it may appear to have changed."
+                                      : " It was not loaded then either, so it affected no measurement.")
                 });
             }
 
