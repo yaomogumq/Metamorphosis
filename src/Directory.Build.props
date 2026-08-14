@@ -43,6 +43,14 @@
 
     <LangVersion>latest</LangVersion>
     <Platforms>AnyCPU</Platforms>
+    <!--
+      CA1416 warns that WinForms/WPF calls are Windows-only. Revit is Windows-only, so
+      every one of those 566 warnings is true and useless - and they buried the dozen
+      real ones (CS8073/CS0472: null checks against non-nullable value types that are
+      always true, and SYSLIB0014 obsolete WebRequest use). Silencing the noise is what
+      makes the signal visible.
+    -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
     <PlatformTarget>x64</PlatformTarget>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>$(MSBuildThisFileDirectory)..\bin\$(Configuration)$(RevitVersion)\</OutputPath>
