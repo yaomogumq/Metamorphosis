@@ -20,7 +20,9 @@
     <AssemblyName>Metamorphosis</AssemblyName>
     <RootNamespace>Metamorphosis</RootNamespace>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- WinForms for the dialogs, WPF because the ribbon buttons want ImageSource. -->
     <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
     <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
     <AssemblyTitle>Metamorphosis</AssemblyTitle>
     <Company>Team Metamorphosis / AEC Hackathon 2016</Company>
@@ -54,12 +56,16 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
-  <!-- .NET Framework needs these as framework references; the SDK targets supply them
-       automatically on net8.0-windows and later. -->
+  <!-- .NET Framework needs these as framework references. UseWindowsForms/UseWPF only
+       pull them in automatically on net8.0-windows and later, so on net48 the WPF
+       assemblies behind System.Windows.Media have to be named explicitly. -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <Reference Include="System.Configuration" />
     <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
   </ItemGroup>
 
   <!-- Read back by DataUtility and ExternalApp through GetManifestResourceStream, so the
